@@ -1,4 +1,4 @@
-# MIL_CODE_EPSILON (Minimal) — Manuscript Reference Pipeline
+# GOLDMARK —  Reference Pipeline
 
 This repository is a **minimal, GitHub-ready snapshot** of the code paths used for the manuscript’s
 end-to-end benchmarking pipeline:
