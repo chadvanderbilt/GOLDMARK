@@ -1,4 +1,4 @@
-"""Training utilities for MIL_CODE_BETA."""
+"""Training utilities for GOLDMARK."""
 
 from .aggregators import create_aggregator
 from .datasets import DatasetConfig, SlideLevelDataset, collate_fn

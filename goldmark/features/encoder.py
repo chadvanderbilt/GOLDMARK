@@ -111,18 +111,18 @@ def _resolve_custom_script(script: str) -> Path:
                 if candidate_file.exists():
                     if not _within_repo(candidate_file):
                         print(
-                            f"[feature-extractor] Warning: custom encoder script '{candidate_file}' is outside MIL_CODE_BETA"
+                            f"[feature-extractor] Warning: custom encoder script '{candidate_file}' is outside GOLDMARK"
                         )
                     return candidate_file.resolve()
         elif candidate.exists():
             if not _within_repo(candidate):
                 print(
-                    f"[feature-extractor] Warning: custom encoder script '{candidate}' is outside MIL_CODE_BETA"
+                    f"[feature-extractor] Warning: custom encoder script '{candidate}' is outside GOLDMARK"
                 )
             return candidate.resolve()
 
     raise FileNotFoundError(
-        f"Unable to locate custom encoder script '{script}'. Checked within MIL_CODE_BETA and provided paths."
+        f"Unable to locate custom encoder script '{script}'. Checked within GOLDMARK and provided paths."
     )
 
 
@@ -143,7 +143,7 @@ def _import_custom_module(script: Optional[str], module_name: Optional[str]):
         module_path = getattr(module, "__file__", None)
         if module_path and not _within_repo(Path(module_path)):
             print(
-                f"[feature-extractor] Warning: custom encoder module '{module_name}' is outside MIL_CODE_BETA"
+                f"[feature-extractor] Warning: custom encoder module '{module_name}' is outside GOLDMARK"
             )
         return module
     raise ValueError("Either script or module_name must be provided for custom encoders")
