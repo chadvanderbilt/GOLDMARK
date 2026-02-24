@@ -6,6 +6,29 @@ rest of the pipeline should remain identical.
 
 ## TCGA (GDC-based)
 
+### Generate GDC manifests via API (SVS + WGS VCF)
+
+If you don’t already have a GDC manifest, you can generate one directly from the GDC API.
+
+SVS (whole-slide images):
+
+```bash
+python targets/tcga/gdc_generate_manifest.py svs \
+  --project-id TCGA-COAD \
+  --out tcga_coad_svs_manifest.tsv
+```
+
+WGS VCF (variant calls):
+
+```bash
+python targets/tcga/gdc_generate_manifest.py wgs-vcf \
+  --project-id TCGA-COAD \
+  --out tcga_coad_wgs_vcf_manifest.tsv
+```
+
+If your project uses a different variant calling workflow, pass filters like `--workflow-type` and
+`--data-type` (and optionally disable the WGS constraint with `--experimental-strategy ""`).
+
 ### Download raw files
 
 Use the GDC Data Portal or API to generate a **manifest** (`.tsv`) for the files you want (SVS, MAF, …),
@@ -70,4 +93,3 @@ python scripts/generate_versioned_split_manifest.py \
 
 Output:
 `data/checkpoints/PTEN/versioned_split_manifest/PTEN_all_splits_latest.csv`
-

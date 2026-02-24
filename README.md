@@ -51,7 +51,15 @@ export REPO_ROOT="$PWD"
 
 ### 1) Targets (TCGA example)
 
-Download data from GDC (SVS and/or MAF):
+Generate a GDC manifest (SVS example):
+
+```bash
+python targets/tcga/gdc_generate_manifest.py svs \
+  --project-id TCGA-COAD \
+  --out tcga_coad_svs_manifest.tsv
+```
+
+Download data from GDC:
 
 ```bash
 targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --token gdc_token.txt --out data/gdc_download
