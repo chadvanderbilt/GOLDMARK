@@ -54,7 +54,7 @@ export REPO_ROOT="$PWD"
 Generate a GDC manifest (SVS example):
 
 ```bash
-python targets/tcga/gdc_generate_manifest.py svs \
+python -m goldmark gdc-manifest svs \
   --project-id TCGA-COAD \
   --out tcga_coad_svs_manifest.tsv
 ```

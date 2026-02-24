@@ -30,6 +30,44 @@ def normalize_manifest(args: argparse.Namespace) -> None:
     print(f"Normalized manifest written to {output_path}")
 
 
+def run_gdc_manifest(args: argparse.Namespace) -> None:
+    from goldmark.targets.gdc_manifest import generate_svs_manifest, generate_wgs_vcf_manifest
+
+    kind = getattr(args, "gdc_kind", "") or getattr(args, "subcommand", "")
+    kind = str(kind).strip().lower()
+    project_id = str(args.project_id).strip()
+    out_path = Path(args.out).expanduser()
+    page_size = int(getattr(args, "page_size", 2000) or 2000)
+    print_summary = bool(getattr(args, "print_summary", False))
+
+    if kind == "svs":
+        count = generate_svs_manifest(
+            project_id,
+            out_path,
+            page_size=page_size,
+            print_summary=print_summary,
+        )
+        print(f"Wrote SVS manifest for {project_id} (files={count}) -> {out_path}")
+        return
+
+    if kind == "wgs-vcf":
+        count = generate_wgs_vcf_manifest(
+            project_id,
+            out_path,
+            data_category=str(getattr(args, "data_category", "") or ""),
+            data_types=getattr(args, "data_type", None),
+            workflow_types=getattr(args, "workflow_type", None),
+            reference_genomes=getattr(args, "reference_genome", None),
+            experimental_strategy=str(getattr(args, "experimental_strategy", "") or ""),
+            page_size=page_size,
+            print_summary=print_summary,
+        )
+        print(f"Wrote WGS VCF manifest for {project_id} (files={count}) -> {out_path}")
+        return
+
+    raise ValueError(f"Unknown gdc-manifest subcommand '{kind}'. Expected svs or wgs-vcf.")
+
+
 def run_tiling(args: argparse.Namespace) -> None:
     from goldmark.tiling import SlideTiler, TilingConfig
 
@@ -391,6 +429,47 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default="INFO", help="Logging level")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    gdc_parser = subparsers.add_parser("gdc-manifest", help="Generate gdc-client manifests via the GDC API")
+    gdc_subparsers = gdc_parser.add_subparsers(dest="gdc_kind", required=True)
+
+    gdc_svs = gdc_subparsers.add_parser("svs", help="Manifest for SVS whole-slide images")
+    gdc_svs.add_argument("--project-id", required=True, help="e.g., TCGA-COAD")
+    gdc_svs.add_argument("--out", required=True, help="Output manifest TSV path")
+    gdc_svs.add_argument("--page-size", type=int, default=2000)
+    gdc_svs.add_argument("--print-summary", action="store_true", help="Print basic metadata histograms")
+    gdc_svs.set_defaults(func=run_gdc_manifest)
+
+    gdc_wgs = gdc_subparsers.add_parser("wgs-vcf", help="Manifest for WGS VCF variant call files")
+    gdc_wgs.add_argument("--project-id", required=True, help="e.g., TCGA-COAD")
+    gdc_wgs.add_argument("--out", required=True, help="Output manifest TSV path")
+    gdc_wgs.add_argument("--page-size", type=int, default=2000)
+    gdc_wgs.add_argument("--print-summary", action="store_true", help="Print basic metadata histograms")
+    gdc_wgs.add_argument("--data-category", default="Simple Nucleotide Variation")
+    gdc_wgs.add_argument(
+        "--data-type",
+        action="append",
+        default=None,
+        help="Repeatable. If omitted, uses common defaults.",
+    )
+    gdc_wgs.add_argument(
+        "--workflow-type",
+        action="append",
+        default=None,
+        help="Repeatable. Optional analysis.workflow_type filter (e.g., 'MuTect2 Annotation').",
+    )
+    gdc_wgs.add_argument(
+        "--reference-genome",
+        action="append",
+        default=None,
+        help="Repeatable. Optional reference_genome filter (e.g., GRCh38).",
+    )
+    gdc_wgs.add_argument(
+        "--experimental-strategy",
+        default="WGS",
+        help="Optional experimental_strategy filter (default: WGS). Use empty string to disable.",
+    )
+    gdc_wgs.set_defaults(func=run_gdc_manifest)
 
     manifest_parser = subparsers.add_parser("manifest", help="Normalize heterogeneous manifests")
     manifest_parser.add_argument("input", help="Path to manifest (csv/tsv)")

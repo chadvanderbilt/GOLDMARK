@@ -13,7 +13,7 @@ If you don’t already have a GDC manifest, you can generate one directly from t
 SVS (whole-slide images):
 
 ```bash
-python targets/tcga/gdc_generate_manifest.py svs \
+python -m goldmark gdc-manifest svs \
   --project-id TCGA-COAD \
   --out tcga_coad_svs_manifest.tsv
 ```
@@ -21,13 +21,16 @@ python targets/tcga/gdc_generate_manifest.py svs \
 WGS VCF (variant calls):
 
 ```bash
-python targets/tcga/gdc_generate_manifest.py wgs-vcf \
+python -m goldmark gdc-manifest wgs-vcf \
   --project-id TCGA-COAD \
   --out tcga_coad_wgs_vcf_manifest.tsv
 ```
 
 If your project uses a different variant calling workflow, pass filters like `--workflow-type` and
 `--data-type` (and optionally disable the WGS constraint with `--experimental-strategy ""`).
+
+The underlying script entry point is also available at:
+`targets/tcga/gdc_generate_manifest.py`
 
 ### Download raw files
 
