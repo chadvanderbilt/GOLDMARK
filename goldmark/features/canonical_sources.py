@@ -201,6 +201,35 @@ def _load_openmidnight(device: torch.device) -> nn.Module:
     return model.to(device).eval()
 
 
+class _ToyAvgPoolEncoder(nn.Module):
+    """A tiny, dependency-free encoder for smoke tests.
+
+    This intentionally does *not* download weights and is deterministic given the input.
+    """
+
+    def __init__(self, grid: int = 8) -> None:
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d((grid, grid))
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        pooled = self.pool(inputs)
+        return pooled.flatten(1)
+
+
+def _load_toy(device: torch.device) -> nn.Module:
+    model = _ToyAvgPoolEncoder(grid=8)
+    return model.to(device).eval()
+
+
+def _toy_transform(_model: nn.Module) -> T.Compose:
+    return T.Compose(
+        [
+            T.Resize((224, 224)),
+            T.ToTensor(),
+        ]
+    )
+
+
 class _ViTHiddenStateWrapper(nn.Module):
     """Project HuggingFace ViT outputs down to the CLS token features."""
 
@@ -279,6 +308,13 @@ def _hoptimus_transform(_model: nn.Module) -> T.Compose:
 
 
 CANONICAL_SPECS: Dict[str, CanonicalEncoderSpec] = {
+    "toy": CanonicalEncoderSpec(
+        slug="toy",
+        feature_dim=3 * 8 * 8,
+        tile_size=224,
+        loader=_load_toy,
+        transform_factory=_toy_transform,
+    ),
     "vit-large": CanonicalEncoderSpec(
         slug="vit-large",
         feature_dim=1024,

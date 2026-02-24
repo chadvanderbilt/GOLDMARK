@@ -5,9 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-import cv2
 import numpy as np
-import openslide
 import pandas as pd
 import torch
 
@@ -110,6 +108,23 @@ class InferenceRunner:
 
     # ------------------------------------------------------------------
     def _generate_overlay(self, slide_id: str, attention: torch.Tensor, probability: float) -> None:
+        try:
+            import cv2  # type: ignore
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Overlay generation requires opencv-python. Install it (or `requirements-wsi.txt`) "
+                "or rerun inference with --no-overlays."
+            ) from exc
+
+        try:
+            import openslide  # type: ignore
+        except Exception as exc:  # pragma: no cover - optional dependency / native lib missing
+            raise RuntimeError(
+                "Overlay generation requires openslide-python and the native OpenSlide library. "
+                "Install OpenSlide (e.g., `conda install -c conda-forge openslide`) "
+                "or rerun inference with --no-overlays."
+            ) from exc
+
         if self.feature_dir is None:
             self.logger.debug("Feature directory not provided; skipping overlay for %s", slide_id)
             return

@@ -1,7 +1,6 @@
 # GOLDMARK — Manuscript Reference Pipeline
 
-This repository is in support for the manuscript **GOLDMARK: Governed Outcome-Linked Diagnostic Model Assessment Reference Kit** and is composed of the
-end-to-end benchmarking pipeline:
+This repository is in support of the manuscript **GOLDMARK: Governed Outcome-Linked Diagnostic Model Assessment Reference Kit** and is composed of the end-to-end benchmarking pipeline:
 
 1) **Target construction** (TCGA via GDC download + variant labeling / OncoKB annotation)
 2) **Tiling** (20x/40x coordinate generation)
@@ -12,6 +11,24 @@ end-to-end benchmarking pipeline:
 The design goal is reproducibility and clarity: **cross-validation alone is not sufficient**—the pipeline
 is built around **reciprocal external testing** (e.g., TCGA→IMPACT and IMPACT→TCGA) under identical
 preprocessing and evaluation criteria.
+
+## Start here (60-second smoke test)
+
+Runs end-to-end on **CPU** using **synthetic raster images** (no TCGA/IMPACT data, no OpenSlide required).
+Uses the built-in `toy` encoder (no weight downloads).
+
+```bash
+git clone https://github.com/chadvanderbilt/GOLDMARK.git
+cd GOLDMARK
+
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+
+python scripts/demo_smoke_test.py
+```
+
+Outputs land in `runs/smoke_test/` (including `runs/smoke_test/inference/inference/inference_results.csv`).
 
 Docs:
 - `docs/targets.md`
@@ -29,17 +46,23 @@ Docs:
 
 ## Installation
 
-This repo targets **Python 3.10+**. A minimal dependency list is provided in `requirements.txt`.
-
-Typical (pip) install:
+This repo targets **Python 3.10+**.
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
 Notes:
-- `openslide-python` requires the system OpenSlide library (platform-specific).
-- Some canonical encoders download weights via Hugging Face / timm; for offline runs, pre-cache weights or use `--custom-encoder`.
+- For **whole-slide image (WSI)** tiling and attention overlays, install the optional dependencies:
+  ```bash
+  python -m pip install -r requirements-wsi.txt
+  ```
+  `openslide-python` also requires the native OpenSlide library (platform-specific).
+- For **canonical foundation-model encoders** (timm / transformers / HF hub), install:
+  ```bash
+  python -m pip install -r requirements-encoders.txt
+  ```
+  Some encoders download weights and/or require gated access; for offline runs, pre-cache weights or use `--custom-encoder`.
 
 ## Quickstart (typical flow)
 
@@ -62,7 +85,7 @@ python -m goldmark gdc-manifest svs \
 Download data from GDC:
 
 ```bash
-targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --token gdc_token.txt --out data/gdc_download
+targets/tcga/gdc_download.sh --manifest tcga_coad_svs_manifest.tsv --token gdc_token.txt --out data/gdc_download
 ```
 
 Annotate MAF with OncoKB (token via env var):
@@ -120,7 +143,7 @@ PYTHONPATH=. python -m goldmark tiling data/manifests/TCGA_PTEN_slide_manifest.c
   --target-mpp 0.5
 ```
 
-Tile manifests are written under `runs/<run-name>/tiling/tiles/` as `<slide_id>_tiles.csv`.
+Tile manifests are written under `runs/<run-name>/tiling/tiles/manifests/` as `<slide_id>_tiles.csv`.
 
 ### 3) Feature extraction + QC metadata
 
@@ -147,7 +170,7 @@ Optional integrity audit (tile counts vs feature lengths):
 
 ```bash
 python scripts/check_tile_feature_counts.py \
-  --tile-manifest-dir runs/tcga_pten_demo/tiling/tiles \
+  --tile-manifest-dir runs/tcga_pten_demo/tiling/tiles/manifests \
   --feature-dir runs/tcga_pten_demo/features/prov-gigapath
 ```
 
@@ -172,6 +195,67 @@ See:
 - Workflow: `paper/figures/workflow_schematic.pdf`
 - Tile/feature QC: `paper/figures/qc_tile_feature_integrity.pdf`
 - Table 1 (counts): `paper/tables/table1_gene_mutation_counts.tex`
+
+## Manuscript tasks (Table 1)
+
+<details>
+<summary>Show tumor/target tasks and cohort counts</summary>
+
+| Tumor Code | Tumor Type | Gene Mutation | MSKCC Total | MSKCC Positive | MSKCC Negative | TCGA Total | TCGA Positive | TCGA Negative |
+| --- | --- | --- | ---:| ---:| ---:| ---:| ---:| ---:|
+| BLCA | Bladder Urothelial Carcinoma | PIK3CA | 2031 | 337 | 1694 | 386 | 77 | 309 |
+| BLCA | Bladder Urothelial Carcinoma | FGFR3 | 2031 | 393 | 1638 | 386 | 34 | 352 |
+| BLCA | Bladder Urothelial Carcinoma | ERBB2 | 2031 | 207 | 1824 | 386 | 37 | 349 |
+| BLCA | Bladder Urothelial Carcinoma | TSC1 | 2031 | 131 | 1900 | 386 | 27 | 359 |
+| BLCA | Bladder Urothelial Carcinoma | ERCC2 | 2031 | 141 | 1890 | 386 | 28 | 358 |
+| BRCA | Breast Carcinoma | PIK3CA | 2735 | 966 | 1769 | 1000 | 354 | 646 |
+| CESC | Cervical Squamous Cell Carcinoma | PIK3CA | 171 | 62 | 109 | 266 | 82 | 184 |
+| COAD | Colon Adenocarcinoma | PIK3CA | 2959 | 605 | 2354 | 550 | 130 | 420 |
+| COAD | Colon Adenocarcinoma | BRAF | 2959 | 318 | 2641 | 550 | 59 | 491 |
+| COAD | Colon Adenocarcinoma | ATM | 2959 | 153 | 2806 | 550 | 63 | 487 |
+| COAD | Colon Adenocarcinoma | PTEN | 2959 | 183 | 2776 | 550 | 38 | 512 |
+| COAD | Colon Adenocarcinoma | MSI | 2959 | 350 | 2609 | 405 | 70 | 335 |
+| GBM | Glioblastoma Multiforme | PTEN | 816 | 263 | 553 | 244 | 77 | 167 |
+| UCEC | Endometrial Cancer | PTEN | 2062 | 972 | 1090 | 499 | 319 | 180 |
+| UCEC | Endometrial Cancer | PIK3CA | 2062 | 904 | 1158 | 499 | 254 | 245 |
+| UCEC | Endometrial Cancer | FBXW7 | 2062 | 279 | 1783 | 499 | 94 | 405 |
+| UCEC | Endometrial Cancer | ATM | 2062 | 142 | 1920 | 499 | 73 | 426 |
+| UCEC | Endometrial Cancer | POLE | 2062 | 114 | 1948 | 499 | 49 | 450 |
+| LGG | Glioma | IDH1 | 449 | 216 | 233 | 491 | 382 | 109 |
+| LGG | Glioma | PIK3CA | 449 | 41 | 408 | 491 | 42 | 449 |
+| HNSC | Head and Neck Carcinoma | PIK3CA | 485 | 84 | 401 | 431 | 66 | 365 |
+| HNSC | Head and Neck Carcinoma | HRAS | 485 | 11 | 474 | 431 | 25 | 406 |
+| LUAD | Lung Adenocarcinoma | KRAS | 923 | 273 | 650 | 465 | 171 | 294 |
+| LUAD | Lung Adenocarcinoma | EGFR | 923 | 273 | 650 | 465 | 51 | 414 |
+| SKCM | Melanoma | BRAF | 886 | 213 | 673 | 432 | 233 | 199 |
+| SKCM | Melanoma | NRAS | 886 | 143 | 743 | 432 | 112 | 320 |
+| SKCM | Melanoma | PTEN | 886 | 63 | 823 | 432 | 50 | 382 |
+| SKCM | Melanoma | MAP2K1 | 886 | 38 | 848 | 432 | 26 | 406 |
+| PAAD | Pancreatic Adenocarcinoma | KRAS | 3018 | 2674 | 344 | 181 | 136 | 45 |
+| PCPG | Pheochromocytoma/Paraganglioma | HRAS | 18 | 2 | 16 | 176 | 19 | 157 |
+| STAD | Stomach Adenocarcinoma | PIK3CA | 742 | 69 | 673 | 374 | 60 | 314 |
+| THCA | Thyroid Cancer | BRAF | 920 | 399 | 521 | 495 | 296 | 199 |
+| THCA | Thyroid Cancer | NRAS | 920 | 130 | 790 | 495 | 41 | 454 |
+
+</details>
+
+## Launch all manuscript tasks (optional)
+
+This repo includes a convenience launcher that loops over the manuscript task list and calls
+`scripts/run_training_scan_target.py` for each tumor/target.
+
+```bash
+export MIL_DATA_ROOT="/path/to/foundation_model_training_images"
+
+# dry-run (prints commands)
+python scripts/launch_manuscript_tasks.py
+
+# execute (runs training scans)
+python scripts/launch_manuscript_tasks.py --execute
+```
+
+Note: this wrapper runs commands **sequentially**. On HPC clusters you will typically wrap each printed command
+in `sbatch` (or your scheduler of choice).
 
 ## Notes
 

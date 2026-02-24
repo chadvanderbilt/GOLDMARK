@@ -1,0 +1,8 @@
+# Optional dependencies for whole-slide image (WSI) tiling and attention overlays.
+#
+# Note: openslide-python requires the native OpenSlide library to be installed on your system.
+
+openslide-python
+opencv-python
+scikit-image
+

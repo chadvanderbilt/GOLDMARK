@@ -1,0 +1,35 @@
+tumor_code,tumor_type,target
+BLCA,Bladder Urothelial Carcinoma,PIK3CA
+BLCA,Bladder Urothelial Carcinoma,FGFR3
+BLCA,Bladder Urothelial Carcinoma,ERBB2
+BLCA,Bladder Urothelial Carcinoma,TSC1
+BLCA,Bladder Urothelial Carcinoma,ERCC2
+BRCA,Breast Carcinoma,PIK3CA
+CESC,Cervical Squamous Cell Carcinoma,PIK3CA
+COAD,Colon Adenocarcinoma,PIK3CA
+COAD,Colon Adenocarcinoma,BRAF
+COAD,Colon Adenocarcinoma,ATM
+COAD,Colon Adenocarcinoma,PTEN
+COAD,Colon Adenocarcinoma,MSI
+GBM,Glioblastoma Multiforme,PTEN
+UCEC,Endometrial Cancer,PTEN
+UCEC,Endometrial Cancer,PIK3CA
+UCEC,Endometrial Cancer,FBXW7
+UCEC,Endometrial Cancer,ATM
+UCEC,Endometrial Cancer,POLE
+LGG,Glioma,IDH1
+LGG,Glioma,PIK3CA
+HNSC,Head and Neck Carcinoma,PIK3CA
+HNSC,Head and Neck Carcinoma,HRAS
+LUAD,Lung Adenocarcinoma,KRAS
+LUAD,Lung Adenocarcinoma,EGFR
+SKCM,Melanoma,BRAF
+SKCM,Melanoma,NRAS
+SKCM,Melanoma,PTEN
+SKCM,Melanoma,MAP2K1
+PAAD,Pancreatic Adenocarcinoma,KRAS
+PCPG,Pheochromocytoma/Paraganglioma,HRAS
+STAD,Stomach Adenocarcinoma,PIK3CA
+THCA,Thyroid Cancer,BRAF
+THCA,Thyroid Cancer,NRAS
+

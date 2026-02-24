@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Dict, Optional, Any, TYPE_CHECKING
 
 import numpy as np
-import openslide
 import torch
 import torchvision.transforms as T
 from torch import nn
+from PIL import Image
 
 from goldmark.utils.logging import get_logger
 from goldmark.features.canonical_sources import load_canonical_encoder
@@ -266,30 +266,128 @@ class FeatureExtractor:
         failure_reason: Optional[str] = None
         num_features: Optional[int] = None
         try:
-            coords = df[["x", "y", "level"]].astype(int).to_numpy()
+            tile_paths: Optional[list[str]] = None
+            if "tile_path" in df.columns:
+                candidate_paths: list[str] = []
+                present = 0
+                for value in df["tile_path"].tolist():
+                    if value is None:
+                        candidate_paths.append("")
+                        continue
+                    text = str(value).strip()
+                    if not text or text.lower() == "nan":
+                        candidate_paths.append("")
+                        continue
+                    present += 1
+                    path = Path(text)
+                    if not path.is_absolute():
+                        path = (tile_manifest.parent / path).resolve()
+                    candidate_paths.append(str(path))
+                if present == len(df) and len(df) > 0:
+                    missing = [p for p in candidate_paths if not Path(p).exists()]
+                    if missing:
+                        raise FileNotFoundError(
+                            f"{len(missing)} tile paths in {tile_manifest} do not exist. Example: {missing[0]}"
+                        )
+                    tile_paths = candidate_paths
+
+            if {"x", "y", "level"}.issubset(df.columns):
+                coords = df[["x", "y", "level"]].astype(int).to_numpy()
+            elif tile_paths is not None:
+                coords = np.zeros((len(df), 3), dtype=int)
+            else:
+                raise ValueError(
+                    f"Tile manifest {tile_manifest} must include columns x,y,level (or tile_path)."
+                )
 
             from torch.utils.data import Dataset, DataLoader  # type: ignore
 
             class _TileDataset(Dataset):
-                def __init__(self, slide_path: Path, coords: np.ndarray, tile_size: int, transform) -> None:
+                def __init__(
+                    self,
+                    slide_path: Path,
+                    coords: np.ndarray,
+                    tile_paths: Optional[list[str]],
+                    tile_size: int,
+                    transform,
+                ) -> None:
                     self.slide_path = str(slide_path)
                     self.coords = coords
+                    self.tile_paths = tile_paths
                     self.tile_size = int(tile_size)
                     self.transform = transform
                     self._slide = None
+                    self._image = None
+                    self._backend: Optional[str] = None
+
+                def _init_backend(self) -> str:
+                    if self._backend:
+                        return self._backend
+
+                    openslide_error: Optional[BaseException] = None
+                    try:
+                        import openslide  # type: ignore
+
+                        try:
+                            self._slide = openslide.OpenSlide(self.slide_path)
+                            self._backend = "openslide"
+                            return self._backend
+                        except Exception as exc:
+                            openslide_error = exc
+                    except Exception as exc:
+                        openslide_error = exc
+
+                    try:
+                        self._image = Image.open(self.slide_path).convert("RGB")
+                    except Exception as exc:
+                        message = f"Unable to open slide '{self.slide_path}' via OpenSlide or Pillow."
+                        if openslide_error:
+                            message += f" OpenSlide error: {openslide_error}"
+                        raise RuntimeError(message) from exc
+
+                    self._backend = "pil"
+                    return self._backend
+
+                def _read_tile_pil(self, x: int, y: int) -> Image.Image:
+                    if self._image is None:
+                        self._image = Image.open(self.slide_path).convert("RGB")
+                    tile = self._image.crop((x, y, x + self.tile_size, y + self.tile_size))
+                    if tile.size != (self.tile_size, self.tile_size):
+                        padded = Image.new("RGB", (self.tile_size, self.tile_size), color=(255, 255, 255))
+                        padded.paste(tile, (0, 0))
+                        tile = padded
+                    return tile
 
                 def __len__(self) -> int:
                     return int(self.coords.shape[0])
 
                 def __getitem__(self, idx: int):
-                    if self._slide is None:
-                        self._slide = openslide.OpenSlide(self.slide_path)
-                    x, y, level = self.coords[idx].tolist()
-                    region = self._slide.read_region((int(x), int(y)), level=int(level), size=(self.tile_size, self.tile_size))
-                    img = region.convert("RGB")
+                    if self.tile_paths is not None:
+                        tile_path = self.tile_paths[int(idx)]
+                        if not tile_path:
+                            raise FileNotFoundError(f"Missing tile_path for index={idx}")
+                        with Image.open(tile_path) as opened:
+                            img = opened.convert("RGB")
+                        return self.transform(img)
+
+                    backend = self._init_backend()
+                    x, y, level = self.coords[int(idx)].tolist()
+                    if backend == "openslide":
+                        if self._slide is None:
+                            backend = self._init_backend()
+                        if self._slide is None:
+                            raise RuntimeError("OpenSlide backend selected but slide handle is unset.")
+                        region = self._slide.read_region(
+                            (int(x), int(y)),
+                            level=int(level),
+                            size=(self.tile_size, self.tile_size),
+                        )
+                        img = region.convert("RGB")
+                    else:
+                        img = self._read_tile_pil(int(x), int(y))
                     return self.transform(img)
 
-            dataset = _TileDataset(slide_path, coords, self.config.tile_size, self.transform)
+            dataset = _TileDataset(slide_path, coords, tile_paths, self.config.tile_size, self.transform)
             num_workers = max(0, int(getattr(self.config, "num_workers", 0) or 0))
             loader = DataLoader(
                 dataset,

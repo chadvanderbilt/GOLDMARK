@@ -1,0 +1,8 @@
+# Optional dependencies for canonical foundation-model encoders.
+#
+# These encoders may still require model-specific weight downloads and/or gated access.
+
+timm
+transformers
+huggingface_hub
+

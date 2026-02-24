@@ -1,7 +1,8 @@
-# Minimal runtime dependencies for the manuscript reference pipeline.
+# Core dependencies (smoke-test + CPU execution).
 #
-# Note: some foundation models are loaded via timm / transformers / huggingface_hub
-# and may require additional, model-specific dependencies or gated weight access.
+# Install optional extras when working with real WSIs / canonical foundation models:
+# - Whole-slide images:   pip install -r requirements-wsi.txt
+# - Canonical encoders:   pip install -r requirements-encoders.txt
 
 numpy
 pandas
@@ -10,15 +11,4 @@ scikit-learn
 torch
 torchvision
 tqdm
-
-# WSI + tiling
-openslide-python
 Pillow
-opencv-python
-scikit-image
-
-# Canonical encoder loaders (optional but commonly used)
-timm
-transformers
-huggingface_hub
-
