@@ -1,6 +1,6 @@
 # GOLDMARK — Manuscript Reference Pipeline
 
-This repository is a **minimal, GitHub-ready snapshot** of the code paths used for the manuscript’s
+This repository is in support for the manuscript **GOLDMARK: Governed Outcome-Linked Diagnostic Model Assessment Reference Kit** and is composed of the
 end-to-end benchmarking pipeline:
 
 1) **Target construction** (TCGA via GDC download + variant labeling / OncoKB annotation)
