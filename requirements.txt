@@ -1,0 +1,24 @@
+# Minimal runtime dependencies for the manuscript reference pipeline.
+#
+# Note: some foundation models are loaded via timm / transformers / huggingface_hub
+# and may require additional, model-specific dependencies or gated weight access.
+
+numpy
+pandas
+requests
+scikit-learn
+torch
+torchvision
+tqdm
+
+# WSI + tiling
+openslide-python
+Pillow
+opencv-python
+scikit-image
+
+# Canonical encoder loaders (optional but commonly used)
+timm
+transformers
+huggingface_hub
+

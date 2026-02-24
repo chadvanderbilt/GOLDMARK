@@ -1,0 +1,73 @@
+# Target construction (TCGA + IMPACT)
+
+This repository separates **label generation** (“targets”) from WSI preprocessing and model training.
+That separation is intentional: target definitions can change (e.g., stricter clinical criteria), and the
+rest of the pipeline should remain identical.
+
+## TCGA (GDC-based)
+
+### Download raw files
+
+Use the GDC Data Portal or API to generate a **manifest** (`.tsv`) for the files you want (SVS, MAF, …),
+then download via `gdc-client`:
+
+```bash
+targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --token gdc_token.txt --out data/gdc_download
+```
+
+### Variant labeling + OncoKB
+
+This repo includes a token-safe OncoKB annotator:
+
+```bash
+export ONCOKB_TOKEN="..."
+python targets/variants/annotate_maf_oncokb_by_hgvsg.py \
+  --maf-glob "data/gdc_download/**/**.maf.gz" \
+  --output data/oncokb/oncokb_annotations.csv
+```
+
+From the annotated mutation table, derive a simple **patient-level binary label** for a target gene:
+
+```bash
+python targets/variants/summarize_gene_status.py \
+  --annotations data/oncokb/oncokb_annotations.csv \
+  --gene PTEN \
+  --output data/targets/PTEN_patient_labels.csv
+```
+
+Finally, join SVS paths to those patient labels:
+
+```bash
+python targets/tcga/build_slide_manifest_from_svs_and_mutations.py \
+  --svs-root data/gdc_download \
+  --labels data/targets/PTEN_patient_labels.csv \
+  --output data/manifests/TCGA_PTEN_slide_manifest.csv
+```
+
+## IMPACT (minimal public example)
+
+This repo does **not** ship clinical IMPACT data. For documentation and schema parity only, we include
+the **header** of a cohort manifest:
+
+- `examples/manifests/impact_LUAD_manifest_header.csv`
+
+## Split manifests (versioned, patient-level)
+
+Training and evaluation use **five repeated patient-level splits** stored in a “versioned split manifest”.
+
+Schema example:
+- `examples/manifests/tcga_split_manifest_header.csv`
+
+Generator:
+
+```bash
+python scripts/generate_versioned_split_manifest.py \
+  --manifest data/manifests/TCGA_PTEN_slide_manifest.csv \
+  --target PTEN \
+  --label-column label_index \
+  --target-dir data/checkpoints/PTEN
+```
+
+Output:
+`data/checkpoints/PTEN/versioned_split_manifest/PTEN_all_splits_latest.csv`
+

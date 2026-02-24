@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+# Local envs
+.venv/
+venv/
+
+# Large data / outputs (keep repo lightweight)
+data/
+runs/
+logs/
+tmp/
+outputs/
+
+# Common slide / tensor artifacts
+*.svs
+*.tif
+*.tiff
+*.pt
+*.pth
+*.parquet
+
