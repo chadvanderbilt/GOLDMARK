@@ -48,6 +48,30 @@ if [[ ! -f "${MANIFEST}" ]]; then
 fi
 mkdir -p "${OUTDIR}"
 
+# If --token isn't provided, allow token path via:
+#   - $GDC_TOKEN_FILE, or
+#   - configs/secrets.env (copy from configs/secrets.env.example)
+if [[ -z "${TOKEN}" ]]; then
+  token_candidate="${GDC_TOKEN_FILE:-}"
+  if [[ -z "${token_candidate}" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    repo_root="$(cd "${script_dir}/../.." && pwd)"
+    secrets_env="${repo_root}/configs/secrets.env"
+    if [[ -f "${secrets_env}" ]]; then
+      # shellcheck disable=SC1090
+      source "${secrets_env}"
+      token_candidate="${GDC_TOKEN_FILE:-}"
+    fi
+  fi
+  if [[ -n "${token_candidate}" ]]; then
+    if [[ -f "${token_candidate}" ]]; then
+      TOKEN="${token_candidate}"
+    else
+      echo "[gdc_download] Warning: GDC_TOKEN_FILE not found: ${token_candidate} (continuing without token)" >&2
+    fi
+  fi
+fi
+
 cmd=( "${GDC_CLIENT}" download -m "${MANIFEST}" -d "${OUTDIR}" --retry-amount "${RETRY_AMOUNT}" )
 if [[ -n "${TOKEN}" ]]; then
   if [[ ! -f "${TOKEN}" ]]; then
@@ -59,4 +83,3 @@ fi
 
 echo "[gdc_download] ${cmd[*]}"
 exec "${cmd[@]}"
-

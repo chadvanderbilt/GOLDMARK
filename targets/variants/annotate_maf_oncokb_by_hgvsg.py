@@ -20,12 +20,19 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from goldmark.utils.secrets import load_secrets_env  # noqa: E402
 
 
 def build_hgvsg(chromosome: str, start: int, end: int, ref: str, alt: str) -> str:
@@ -66,6 +73,8 @@ def _read_gene_list(path: Optional[str]) -> Optional[set[str]]:
 
 
 def main() -> int:
+    load_secrets_env()
+
     parser = argparse.ArgumentParser(description="Annotate MAF rows with OncoKB (byHGVSg).")
     parser.add_argument("--maf-glob", required=True, help="Glob for .maf.gz files (recursive supported with **).")
     parser.add_argument("--output", required=True, help="Output CSV path.")
@@ -190,4 +199,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -38,7 +38,12 @@ Use the GDC Data Portal or API to generate a **manifest** (`.tsv`) for the files
 then download via `gdc-client`:
 
 ```bash
-targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --token gdc_token.txt --out data/gdc_download
+# Optional but recommended: set GDC_TOKEN_FILE in `configs/secrets.env`
+# (copy from `configs/secrets.env.example`).
+# `gdc_download.sh` will auto-use $GDC_TOKEN_FILE when present.
+
+python scripts/install_gdc_client.py --dest bin/gdc-client
+targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --out data/gdc_download --gdc-client bin/gdc-client
 ```
 
 ### Variant labeling + OncoKB
@@ -46,7 +51,7 @@ targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --token gdc_token.
 This repo includes a token-safe OncoKB annotator:
 
 ```bash
-export ONCOKB_TOKEN="..."
+# Set ONCOKB_TOKEN in `configs/secrets.env` (recommended) or export ONCOKB_TOKEN in your shell.
 python targets/variants/annotate_maf_oncokb_by_hgvsg.py \
   --maf-glob "data/gdc_download/**/**.maf.gz" \
   --output data/oncokb/oncokb_annotations.csv

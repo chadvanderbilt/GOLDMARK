@@ -44,12 +44,18 @@ class PipelinePaths:
         return self.stage_dir / "inference"
 
     def ensure(self) -> None:
-        for directory in [
-            self.run_dir,
-            self.stage_dir,
-            self.tiles_dir,
-            self.features_dir,
-            self.checkpoints_dir,
-            self.inference_dir,
-        ]:
-            directory.mkdir(parents=True, exist_ok=True)
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.stage_dir.mkdir(parents=True, exist_ok=True)
+
+        stage = (self.stage or "").strip().lower()
+        if stage == "tiling":
+            self.tiles_dir.mkdir(parents=True, exist_ok=True)
+        elif stage == "features":
+            self.features_dir.mkdir(parents=True, exist_ok=True)
+        elif stage == "training":
+            self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        elif stage == "inference":
+            self.inference_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            for directory in [self.tiles_dir, self.features_dir, self.checkpoints_dir, self.inference_dir]:
+                directory.mkdir(parents=True, exist_ok=True)

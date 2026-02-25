@@ -1,0 +1,20 @@
+name: goldmark
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python>=3.10,<3.13
+  - pip
+  - numpy
+  - pandas
+  - requests
+  - scikit-learn
+  - tqdm
+  - pillow
+  - pytorch
+  - torchvision
+  - cpuonly
+  - openslide
+  - openslide-python
+  - opencv
+  - scikit-image

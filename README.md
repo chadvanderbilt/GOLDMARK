@@ -12,27 +12,184 @@ The design goal is reproducibility and clarity: **cross-validation alone is not 
 is built around **reciprocal external testing** (e.g., TCGA→IMPACT and IMPACT→TCGA) under identical
 preprocessing and evaluation criteria.
 
-## Start here (60-second smoke test)
+## Start here (real GDC download + end-to-end pipeline)
 
-Runs end-to-end on **CPU** using **synthetic raster images** (no TCGA/IMPACT data, no OpenSlide required).
-Uses the built-in `toy` encoder (no weight downloads).
+Downloads a tiny subset of **real TCGA SVS slides** via **GDC** and runs:
+
+`download → tiling → features → training → inference`
+
+This is a real-data run (WSI deps + OpenSlide required). Even with a small subset, expect **multiple GB**
+of downloads and non-trivial runtime.
 
 ```bash
 git clone https://github.com/chadvanderbilt/GOLDMARK.git
 cd GOLDMARK
 
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+# Put tokens in one place (never commit the filled file).
+# GOLDMARK commands will auto-load `configs/secrets.env` if present.
+cp configs/secrets.env.example configs/secrets.env
+# edit configs/secrets.env (GDC token file path, ONCOKB_TOKEN, HF_TOKEN, ...)
 
-python scripts/demo_smoke_test.py
+# Option A (recommended on HPC): conda
+conda env create -f environment.yml
+conda activate goldmark
+
+# Option B: venv (requires Python 3.10+ and native OpenSlide installed on your system)
+# python3 -m venv .venv
+# source .venv/bin/activate
+
+python -m pip install -r requirements.txt -r requirements-wsi.txt
+
+# Installs gdc-client into bin/ (ignored by git)
+python scripts/install_gdc_client.py --dest bin/gdc-client
+# Note: some HPC nodes ship older glibc; if gdc-client fails to run, the smoke
+# test will fall back to downloading via the GDC API (sufficient for small runs).
+
+# Downloads 2 tumor + 2 normal slides (smallest by file size) and runs the full pipeline on CPU.
+python scripts/gdc_smoke_test_tcga.py --project-id TCGA-COAD --per-class 2 --device cpu --force
 ```
 
-Outputs land in `runs/smoke_test/` (including `runs/smoke_test/inference/inference/inference_results.csv`).
+Outputs land in `runs/gdc_smoke_test/` (including `runs/gdc_smoke_test/inference/inference/inference_results.csv`).
+
+## Reciprocal TCGA→IMPACT smoke tests (mutation labels + external inference)
+
+This repo ships two end-to-end smoke tests that exercise the **full mutation-label → MIL training → attention export**
+pathway and validate **reciprocal external inference** (TCGA→IMPACT):
+
+1) `scripts/tcga_to_impact_smoke_test.py` (fast, minimal; good for “does anything run?”)
+2) `scripts/tcga_luad_kras_cv_to_impact_smoke_test.py` (**recommended**; 10 TCGA slides, 5-fold CV, attention exports, IMPACT external inference)
+
+### Recommended: TCGA-LUAD KRAS (5×70/30 splits) → IMPACT LUAD external inference
+
+What it does:
+- Downloads **10 TCGA-LUAD diagnostic** slides via GDC (filters to `-00-DX` unless `--allow-non-dx`)
+- Labels each patient as KRAS **positive/negative** from the GDC **Masked Somatic Mutation** MAF
+- Builds **5 independent** 70/30 splits with per-split `val` assignments (train/val/test stored as columns)
+- Trains for a small number of epochs (default: 10) and writes a `cv_summary.csv`
+- Runs **held-out test inference per split** and exports **attention vectors**
+- Runs **external inference on IMPACT LUAD** using the best split checkpoint (and links it from all split dirs)
+
+```bash
+python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+  --run-name gdc_smoke_test_luad_kras_cv_to_impact \
+  --device cpu \
+  --limit-tiles 64 \
+  --epochs 10 \
+  --patience 50 \
+  --force
+```
+
+#### Output layout (important files and where to find them)
+
+All outputs land under `runs/<run-name>/`.
+
+**A) Smoke-test inputs (download + derived labels)**
+- `runs/<run-name>/smoke_data/TCGA-LUAD_svs_manifest.tsv` — full GDC SVS manifest for the project
+- `runs/<run-name>/smoke_data/TCGA-LUAD_svs_manifest_subset.tsv` — the 10 selected diagnostic SVS rows
+- `runs/<run-name>/smoke_data/gdc_download_svs/**/**.svs` — downloaded TCGA SVS files (GDC UUID folders)
+- `runs/<run-name>/smoke_data/gdc_download_maf/**/**.maf.gz` — downloaded GDC mutation calls used for labels
+- `runs/<run-name>/smoke_data/tcga_tcga-luad_kras_slides.csv` — selected slide list + labels (schema below)
+- `runs/<run-name>/smoke_data/impact_external_KRAS_<encoder>.csv` — external IMPACT subset manifest (schema below)
+
+**B) Tiling**
+- `runs/<run-name>/tiling/tiles/manifests/<slide_id>_tiles.csv` — per-slide tile coordinate manifest (schema below)
+
+**C) Features + QC**
+- `runs/<run-name>/features/<encoder>/features_<slide_id>.pt` — per-slide feature tensor (N tiles × D)
+- `runs/<run-name>/features/<encoder>/features_<slide_id>.json` — QC metadata + checksums (schema below)
+- If feature extraction fails QC, tensors are renamed:
+  - `features_<slide_id>.FAILED_tile_count_mismatch.pt`
+  - `features_<slide_id>.FAILED_degenerate_embeddings.pt`
+
+**D) Training (5-fold CV)**
+- `runs/<run-name>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — the split manifest used for tiling/features/training (schema below)
+- `runs/<run-name>/training/checkpoints/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
+- `runs/<run-name>/training/checkpoints/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
+
+**E) Per-split held-out test inference (attention export + ROC/PR plots)**
+
+Written under each split so split context is self-contained:
+- `runs/<run-name>/training/checkpoints/split_1_set/inference/test/inference_results.csv`
+- `runs/<run-name>/training/checkpoints/split_1_set/inference/test/attention/<slide_id>_attention.csv`
+- `runs/<run-name>/training/checkpoints/split_1_set/inference/test/plots/roc_pr_curves.png`
+
+Note: the training stage also writes probability exports under the same directory (e.g. `probabilities_test_set.csv`).
+
+**F) External inference (IMPACT LUAD)**
+
+External inference is executed **once** using the **best split** checkpoint and written under that split:
+- `runs/<run-name>/training/checkpoints/<best_split>/external_inference/IMPACT/inference_results.csv`
+- `runs/<run-name>/training/checkpoints/<best_split>/external_inference/IMPACT/attention/<slide_id>_attention.csv`
+- `runs/<run-name>/training/checkpoints/<best_split>/external_inference/IMPACT/plots/roc_pr_curves.png`
+
+For convenience, each non-best split directory contains an `external_inference/IMPACT` entry that links to (or points at)
+the best-split external inference results.
+
+#### File schemas (column names)
+
+**TCGA slide selection manifest** (`smoke_data/tcga_tcga-luad_kras_slides.csv`)
+- `slide_id` (e.g. `TCGA-05-4244-01Z-00-DX1`)
+- `slide_path` (downloaded `.svs` path)
+- `label_index` (`0`/`1` mutation label for the chosen gene)
+- `patient_id` (TCGA case/patient barcode prefix)
+
+**Versioned split manifest** (`training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv`)
+- `slide_path`, `slide_id`, `label_index`
+- `target` (legacy column retained for compatibility)
+- `split_1_set` … `split_5_set` with values in `{train,val,test}`
+
+**Tile manifest** (`tiling/tiles/manifests/<slide_id>_tiles.csv`)
+- `slide_id`
+- `tile_id` (stable tile identifier)
+- `x`, `y` (level-0 pixel coordinates)
+- `level` (OpenSlide level used for extraction / overlays)
+- `width`, `height` (tile size in pixels at `level`)
+- `tissue_fraction` (fraction of tile kept after tissue mask filtering)
+- `tile_path` (optional; blank when only coordinates are generated)
+
+**Feature metadata JSON** (`features/<encoder>/features_<slide_id>.json`)
+- `slide_id`, `encoder`
+- `tile_manifest`
+- `num_tiles`, `num_features`, `feature_dim`
+- `embedding_stats` (degenerate/variance checks)
+- `feature_sha256`, `feature_bytes`
+- `status` in `{ok,failed}` and `failure_reason` when failed
+
+**CV summary** (`training/checkpoints/classification_report/cv_summary.csv`)
+- `split` (e.g. `split_1_set`)
+- `best_epoch`
+- `val_*` and `test_*` metrics, including `*_roc_auc`, `*_accuracy`, `*_precision`, `*_recall`, `*_f1`, `*_balanced_error_rate`
+
+**Inference results** (`.../inference_results.csv`)
+- `slide_id`
+- `probability` (predicted P(class=1))
+- `prediction` (thresholded at 0.5 by default)
+- `target` (ground-truth label, from `label_index`)
+
+**Attention exports** (`.../attention/<slide_id>_attention.csv`)
+- `slide_id`
+- `tile_index` (0-based)
+- `tile_id`, `x`, `y`, `level` (when tile manifest metadata is available)
+- `attention` (raw attention weight)
+- `probability` (slide-level probability repeated for convenience)
+
+**External inference manifest** (`smoke_data/impact_external_<GENE>_<encoder>.csv`)
+
+Minimum required columns for external inference with `InferenceRunner`:
+- `slide_id` (string id used to resolve features / label rows)
+- `label_index` (0/1 ground-truth label; used as `target_column`)
+
+Strongly recommended columns (enables overlays + clearer provenance):
+- `slide_path` (absolute `.svs` path for overlays; optional if you do not generate overlays)
+- `feature_path` (absolute `.pt` path; optional if you pass `--feature-dir` and follow `features_<slide_id>.pt` naming)
+
+Optional columns:
+- `split` (only needed if you want to run inference on a subset via `InferenceConfig.split_column/split_value`)
 
 Docs:
 - `docs/targets.md`
 - `docs/pipeline.md`
+- SLURM (GPU) example: `examples/slurm/submit_tcga_luad_EGFR_cv_to_impact.sh`
 
 ## Repository layout
 
@@ -85,13 +242,15 @@ python -m goldmark gdc-manifest svs \
 Download data from GDC:
 
 ```bash
-targets/tcga/gdc_download.sh --manifest tcga_coad_svs_manifest.tsv --token gdc_token.txt --out data/gdc_download
+targets/tcga/gdc_download.sh --manifest tcga_coad_svs_manifest.tsv --out data/gdc_download
+# If needed for controlled-access data, set GDC_TOKEN_FILE in configs/secrets.env
+# (or pass --token /path/to/gdc_token.txt).
 ```
 
 Annotate MAF with OncoKB (token via env var):
 
 ```bash
-export ONCOKB_TOKEN="..."
+# export ONCOKB_TOKEN="..."  # or set in configs/secrets.env
 python targets/variants/annotate_maf_oncokb_by_hgvsg.py \
   --maf-glob "data/gdc_download/**/**.maf.gz" \
   --output data/oncokb/oncokb_annotations.csv

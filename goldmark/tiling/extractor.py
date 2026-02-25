@@ -77,8 +77,15 @@ class SlideTiler:
         else:
             with slide_handle as slide:
                 level, mult = _find_level(slide, self.config.target_mpp, self.config.tile_size)
-                mask = self._create_tissue_mask(slide, level, mult)
-                records = self._extract_tiles(slide, slide_id, level, mask, mult)
+                mask, mask_scale_x, mask_scale_y = self._create_tissue_mask(slide, level, mult)
+                records = self._extract_tiles(
+                    slide,
+                    slide_id,
+                    level,
+                    mask,
+                    mask_scale_x=mask_scale_x,
+                    mask_scale_y=mask_scale_y,
+                )
 
         manifest_path = self._save_manifest(slide_id, records)
         return TileSet(slide_id=slide_id, records=records, manifest_path=manifest_path)
@@ -129,20 +136,15 @@ class SlideTiler:
         self.logger.info("Selected %d tiles for slide %s", len(tile_records), slide_id)
         return tile_records
 
-    def _create_tissue_mask(self, slide: openslide.OpenSlide, level: int, mult: float) -> np.ndarray:
+    def _create_tissue_mask(self, slide: openslide.OpenSlide, level: int, mult: float) -> tuple[np.ndarray, float, float]:
         import cv2  # type: ignore
         from skimage.filters import threshold_otsu  # type: ignore
         from skimage.morphology import binary_dilation, binary_erosion, square  # type: ignore
 
-        self.logger.debug("Generating tissue mask at level %s (multiplier %.3f)", level, mult)
-        downsample = slide.level_downsamples[level]
-        scale = self.config.tile_size / (self.config.tile_size * mult)
-        target_size = (
-            int(slide.dimensions[0] / downsample * scale),
-            int(slide.dimensions[1] / downsample * scale),
-        )
-
-        thumbnail = slide.get_thumbnail(target_size)
+        # Always build the tissue mask on a small thumbnail to avoid huge memory/time costs.
+        # Coordinate mapping back to level-0 pixels is computed from the thumbnail size.
+        self.logger.debug("Generating tissue mask for %s at max_dim=2048 (level=%s mult=%.3f)", slide, level, mult)
+        thumbnail = slide.get_thumbnail((2048, 2048))
         rgb = np.array(thumbnail.convert("RGB"))
 
         hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
@@ -158,13 +160,23 @@ class SlideTiler:
 
         if marker_mask is not None:
             tissue_mask[marker_mask > 0] = 0
+        # Remove near-white background (low saturation + high value).
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        background = (sat < 15) & (val > 220)
+        tissue_mask[background] = 0
 
         if self.config.erosion:
             tissue_mask = binary_erosion(tissue_mask, square(self.config.erosion))
         if self.config.dilation:
             tissue_mask = binary_dilation(tissue_mask, square(self.config.dilation))
 
-        return tissue_mask.astype(np.uint8)
+        tissue_mask = tissue_mask.astype(np.uint8)
+        # Scale factors: level-0 pixels per mask pixel.
+        height, width = tissue_mask.shape
+        scale_x = float(slide.dimensions[0]) / float(width) if width else 1.0
+        scale_y = float(slide.dimensions[1]) / float(height) if height else 1.0
+        return tissue_mask, scale_x, scale_y
 
     def _extract_tiles(
         self,
@@ -172,57 +184,67 @@ class SlideTiler:
         slide_id: str,
         level: int,
         mask: np.ndarray,
-        mult: float,
+        *,
+        mask_scale_x: float,
+        mask_scale_y: float,
     ) -> List[TileRecord]:
         tile_size = self.config.tile_size
         stride = self.config.stride
-        downsample = slide.level_downsamples[level]
         tile_records: List[TileRecord] = []
-
+        height0 = int(slide.dimensions[1])
+        width0 = int(slide.dimensions[0])
+        downsample = float(slide.level_downsamples[level])
+        tile_size0 = int(round(float(tile_size) * downsample))
+        stride0 = int(round(float(stride) * downsample))
         mask_height, mask_width = mask.shape
-        coords: Iterable[tuple[int, int]] = (
-            (x, y)
-            for y in range(0, mask_height - int(stride / downsample), int(stride / downsample))
-            for x in range(0, mask_width - int(stride / downsample), int(stride / downsample))
-        )
+        mask_tile_w = max(1, int(round(float(tile_size0) / float(mask_scale_x or 1.0))))
+        mask_tile_h = max(1, int(round(float(tile_size0) / float(mask_scale_y or 1.0))))
 
-        for i, (mask_x, mask_y) in enumerate(coords):
-            region = mask[
-                mask_y : mask_y + int(tile_size / downsample),
-                mask_x : mask_x + int(tile_size / downsample),
-            ]
-            tissue_fraction = float(region.sum()) / region.size
-            if tissue_fraction < self.config.minimum_tissue_percentage:
-                continue
+        for y0 in range(0, max(1, height0 - tile_size0 + 1), max(1, stride0)):
+            for x0 in range(0, max(1, width0 - tile_size0 + 1), max(1, stride0)):
+                mask_x = int(float(x0) / float(mask_scale_x or 1.0))
+                mask_y = int(float(y0) / float(mask_scale_y or 1.0))
+                if mask_x < 0 or mask_y < 0:
+                    continue
+                if mask_x + mask_tile_w > mask_width or mask_y + mask_tile_h > mask_height:
+                    continue
+                region = mask[mask_y : mask_y + mask_tile_h, mask_x : mask_x + mask_tile_w]
+                if region.size == 0:
+                    continue
+                tissue_fraction = float(region.sum()) / float(region.size)
+                if tissue_fraction < self.config.minimum_tissue_percentage:
+                    continue
 
-            loc_x = int(mask_x * downsample)
-            loc_y = int(mask_y * downsample)
+                loc_x = int(x0)
+                loc_y = int(y0)
 
-            tile_id = f"{slide_id}_{i:05d}"
-            tile_path: Optional[str] = None
-            if self.config.save_tiles:
-                tile_img = slide.read_region((loc_x, loc_y), level=level, size=(tile_size, tile_size)).convert("RGB")
-                tile_dir = self.output_dir / slide_id
-                tile_dir.mkdir(parents=True, exist_ok=True)
-                tile_path = str((tile_dir / f"{tile_id}.{self.config.tile_format}").resolve())
-                tile_img.save(tile_path)
+                tile_id = f"{slide_id}_{len(tile_records):05d}"
+                tile_path: Optional[str] = None
+                if self.config.save_tiles:
+                    tile_img = slide.read_region((loc_x, loc_y), level=level, size=(tile_size, tile_size)).convert("RGB")
+                    tile_dir = self.output_dir / slide_id
+                    tile_dir.mkdir(parents=True, exist_ok=True)
+                    tile_path = str((tile_dir / f"{tile_id}.{self.config.tile_format}").resolve())
+                    tile_img.save(tile_path)
 
-            tile_records.append(
-                TileRecord(
-                    slide_id=slide_id,
-                    tile_id=tile_id,
-                    x=loc_x,
-                    y=loc_y,
-                    level=level,
-                    width=tile_size,
-                    height=tile_size,
-                    tissue_fraction=tissue_fraction,
-                    path=tile_path,
+                tile_records.append(
+                    TileRecord(
+                        slide_id=slide_id,
+                        tile_id=tile_id,
+                        x=loc_x,
+                        y=loc_y,
+                        level=level,
+                        width=tile_size,
+                        height=tile_size,
+                        tissue_fraction=tissue_fraction,
+                        path=tile_path,
+                    )
                 )
-            )
 
-            if self.config.limit_tiles and len(tile_records) >= int(self.config.limit_tiles):
-                break
+                if self.config.limit_tiles and len(tile_records) >= int(self.config.limit_tiles):
+                    self.logger.info("Reached limit_tiles=%s for %s", self.config.limit_tiles, slide_id)
+                    self.logger.info("Selected %d tiles for slide %s", len(tile_records), slide_id)
+                    return tile_records
 
         self.logger.info("Selected %d tiles for slide %s", len(tile_records), slide_id)
         return tile_records

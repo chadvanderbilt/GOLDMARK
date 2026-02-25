@@ -62,10 +62,11 @@ class SlideLevelDataset(Dataset):
             return ".FAILED" in name or name.endswith(".failed") or name.endswith(".FAILED")
 
         existing = df["feature_path"].map(lambda p: Path(p).exists() and not _is_failed_feature_path(str(p)))
-        missing = df[~existing]
+        existing = existing.fillna(False).astype(bool)
+        missing = df.loc[~existing]
         if not missing.empty:
             print(f"Warning: dropping {len(missing)} slides without features")
-        return df[existing].reset_index(drop=True)
+        return df.loc[existing].reset_index(drop=True)
 
     def _detect_pattern(self) -> tuple[str, str]:
         if not self.feature_dir or not self.feature_dir.exists():
@@ -113,6 +114,7 @@ class SlideLevelDataset(Dataset):
             "features": features,
             "target": target,
             "slide_id": row[self.config.slide_id_column],
+            "feature_path": feature_path,
         }
 
     @staticmethod

@@ -417,6 +417,7 @@ def run_inference(args: argparse.Namespace) -> None:
             threshold=args.threshold,
             generate_overlays=not args.no_overlays,
             overlay_alpha=args.overlay_alpha,
+            export_attention=bool(getattr(args, "export_attention", False)),
         ),
         log_level=args.log_level,
     )
@@ -564,12 +565,16 @@ def build_parser() -> argparse.ArgumentParser:
     inference_parser.add_argument("--threshold", type=float, default=0.5)
     inference_parser.add_argument("--overlay-alpha", type=float, default=0.6)
     inference_parser.add_argument("--no-overlays", action="store_true")
+    inference_parser.add_argument("--export-attention", action="store_true", help="Export per-tile attention weights")
     inference_parser.set_defaults(func=run_inference)
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
+    from goldmark.utils.secrets import load_secrets_env
+
+    load_secrets_env()
     parser = build_parser()
     args = parser.parse_args(argv)
     args.func(args)

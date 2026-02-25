@@ -21,6 +21,7 @@ class InferenceConfig:
     threshold: float = 0.5
     generate_overlays: bool = True
     overlay_alpha: float = 0.6
+    export_attention: bool = False
 
 
 class InferenceRunner:
@@ -73,11 +74,15 @@ class InferenceRunner:
         results = []
         overlay_dir = self.output_dir / "overlays"
         overlay_dir.mkdir(parents=True, exist_ok=True)
+        attention_dir = self.output_dir / "attention"
+        if self.config.export_attention:
+            attention_dir.mkdir(parents=True, exist_ok=True)
 
         for sample in dataset:
             slide_id = sample["slide_id"]
             features = sample["features"].unsqueeze(0).to(self.device)
             target = int(sample["target"].item())
+            feature_path = sample.get("feature_path")
             with torch.no_grad():
                 attention, _, logits = model(features)
                 probs = torch.softmax(logits, dim=1)
@@ -93,9 +98,15 @@ class InferenceRunner:
                 }
             )
 
+            if self.config.export_attention:
+                try:
+                    self._export_attention(slide_id, attention.squeeze(0), probability, feature_path=feature_path)
+                except Exception as exc:  # pragma: no cover - best effort
+                    self.logger.warning("Attention export failed for %s: %s", slide_id, exc)
+
             if self.config.generate_overlays:
                 try:
-                    self._generate_overlay(slide_id, attention.squeeze(0), probability)
+                    self._generate_overlay(slide_id, attention.squeeze(0), probability, feature_path=feature_path)
                 except Exception as exc:  # pragma: no cover - visualization best effort
                     self.logger.warning("Overlay generation failed for %s: %s", slide_id, exc)
 
@@ -107,7 +118,14 @@ class InferenceRunner:
         return out_path
 
     # ------------------------------------------------------------------
-    def _generate_overlay(self, slide_id: str, attention: torch.Tensor, probability: float) -> None:
+    def _generate_overlay(
+        self,
+        slide_id: str,
+        attention: torch.Tensor,
+        probability: float,
+        *,
+        feature_path: Optional[str] = None,
+    ) -> None:
         try:
             import cv2  # type: ignore
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -125,10 +143,10 @@ class InferenceRunner:
                 "or rerun inference with --no-overlays."
             ) from exc
 
-        if self.feature_dir is None:
-            self.logger.debug("Feature directory not provided; skipping overlay for %s", slide_id)
+        if not feature_path:
+            self.logger.debug("Feature path not available; skipping overlay for %s", slide_id)
             return
-        feature_meta_path = self.feature_dir / f"features_{slide_id}.json"
+        feature_meta_path = Path(str(feature_path)).with_suffix(".json")
         if not feature_meta_path.exists():
             self.logger.debug("No metadata for slide %s; skipping overlay", slide_id)
             return
@@ -178,3 +196,63 @@ class InferenceRunner:
             overlay_path = self.output_dir / "overlays" / f"{slide_id}_prob_{probability:.3f}.png"
             cv2.imwrite(str(overlay_path), cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
             self.logger.debug("Saved overlay for %s to %s", slide_id, overlay_path)
+
+    def _export_attention(
+        self,
+        slide_id: str,
+        attention: torch.Tensor,
+        probability: float,
+        *,
+        feature_path: Optional[str] = None,
+    ) -> None:
+        weights = attention.detach().cpu().numpy().reshape(-1)
+        out_dir = self.output_dir / "attention"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        np.save(str(out_dir / f"{slide_id}_attention.npy"), weights)
+
+        tile_manifest_path = None
+        if feature_path:
+            meta_path = Path(str(feature_path)).with_suffix(".json")
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except Exception:  # noqa: BLE001
+                    meta = None
+                if isinstance(meta, dict):
+                    tile_manifest_path = meta.get("tile_manifest")
+
+        records = []
+        if tile_manifest_path:
+            try:
+                tile_df = pd.read_csv(tile_manifest_path)
+            except Exception:  # noqa: BLE001
+                tile_df = None
+            if tile_df is not None and not tile_df.empty:
+                usable = min(len(weights), len(tile_df))
+                for idx in range(usable):
+                    row = tile_df.iloc[idx]
+                    records.append(
+                        {
+                            "slide_id": slide_id,
+                            "tile_index": idx,
+                            "tile_id": row.get("tile_id", idx),
+                            "x": row.get("x"),
+                            "y": row.get("y"),
+                            "level": row.get("level"),
+                            "attention": float(weights[idx]),
+                            "probability": float(probability),
+                        }
+                    )
+
+        if not records:
+            for idx, weight in enumerate(weights.tolist()):
+                records.append(
+                    {
+                        "slide_id": slide_id,
+                        "tile_index": idx,
+                        "attention": float(weight),
+                        "probability": float(probability),
+                    }
+                )
+
+        pd.DataFrame(records).to_csv(out_dir / f"{slide_id}_attention.csv", index=False)
