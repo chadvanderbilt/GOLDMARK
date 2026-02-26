@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH -J luad_egfr_tcga_to_impact
-#SBATCH -p gpu
+#SBATCH -p preemptable
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
 #SBATCH -t 3-00:00:00
 #SBATCH -o slurm-%x-%j.out
 #SBATCH -e slurm-%x-%j.err
@@ -43,7 +43,13 @@ GENE="${GENE:-EGFR}"
 # Balanced slide subset size:
 # - per-class=5 -> 10 total (smoke-test scale)
 # - increase for a larger run (must be <= number of positives available in the cohort)
+# - per-class=0 labels *all* available cases (full cohort; very large)
 PER_CLASS="${PER_CLASS:-5}"
+
+# External IMPACT inference selection:
+# - impact-per-class=5 -> 10 total (smoke-test scale)
+# - impact-per-class=0 runs external inference on *all* labeled IMPACT cases (very large)
+IMPACT_PER_CLASS="${IMPACT_PER_CLASS:-5}"
 
 # limit-tiles:
 # - 64 is fast but NOT “full slide”
@@ -59,6 +65,7 @@ python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
   --project-id "TCGA-LUAD" \
   --gene "${GENE}" \
   --per-class "${PER_CLASS}" \
+  --impact-per-class "${IMPACT_PER_CLASS}" \
   --encoder "${ENCODER}" \
   --device "cuda" \
   --limit-tiles "${LIMIT_TILES}" \

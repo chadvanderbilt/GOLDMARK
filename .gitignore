@@ -14,6 +14,8 @@ bin/gdc-client*
 
 # Local secrets (never commit)
 configs/secrets.env
+slurm-*.out
+slurm-*.err
 configs/token.txt
 configs/onocokbtoken.txt
 

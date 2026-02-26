@@ -416,6 +416,41 @@ python scripts/launch_manuscript_tasks.py --execute
 Note: this wrapper runs commands **sequentially**. On HPC clusters you will typically wrap each printed command
 in `sbatch` (or your scheduler of choice).
 
+## Run a full project (no subsampling)
+
+The `scripts/tcga_luad_kras_cv_to_impact_smoke_test.py` runner defaults to a **balanced subsample** (via `--per-class`)
+so it can finish quickly. To validate the pipeline end-to-end on a **full TCGA project**, set:
+
+- `--per-class 0` to label and include **all** available cases in the TCGA project (one slide per patient).
+- `--impact-per-class 0` to run external inference on **all** labeled IMPACT slides (optional; can be large).
+
+Important:
+- This can download **hundreds of SVS files** (many 10s–100s of GB). Use a scratch filesystem.
+- By default the TCGA slide filter keeps diagnostic FFPE slides (`-00-DX`). Use `--allow-non-dx` to disable this.
+- Foundation-model encoders may require authentication/approval (e.g. gated HF repos). Put tokens in `configs/secrets.env`.
+
+Example (single full task: TCGA-LUAD EGFR → external IMPACT LUAD):
+
+```bash
+export RUNS_ROOT="runs"
+export RUN_NAME="tcga_luad_egfr_full"
+
+python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+  --output "${RUNS_ROOT}" \
+  --run-name "${RUN_NAME}" \
+  --project-id "TCGA-LUAD" \
+  --gene "EGFR" \
+  --per-class 0 \
+  --impact-per-class 0 \
+  --encoder "h-optimus-0" \
+  --device "cuda" \
+  --limit-tiles 0 \
+  --epochs 120
+```
+
+HPC:
+- See `examples/slurm/submit_tcga_luad_EGFR_cv_to_impact.sh` and set `PER_CLASS=0` (and optionally `IMPACT_PER_CLASS=0`).
+
 ## Notes
 
 - This repo intentionally **does not** ship raw WSIs or protected clinical data.

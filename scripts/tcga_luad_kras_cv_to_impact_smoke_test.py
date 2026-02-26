@@ -413,10 +413,13 @@ def _select_gene_subset(
     experimental_strategy: str = "WXS",
 ) -> List[_ManifestRow]:
     """Select `per_class` positive/negative patients by downloading/parsing per-case MAFs."""
-    per_class = max(1, int(per_class))
+    per_class = int(per_class)
     gene_upper = str(gene).strip().upper()
     if not gene_upper:
         raise ValueError("--gene is required when deriving mutation labels")
+    full_cohort = per_class <= 0
+    if not full_cohort:
+        per_class = max(1, per_class)
 
     by_patient: Dict[str, List[_ManifestRow]] = {}
     for row in rows:
@@ -426,7 +429,7 @@ def _select_gene_subset(
     counts = {0: 0, 1: 0}
     checked = 0
     for patient_id in sorted(by_patient.keys()):
-        if counts[0] >= per_class and counts[1] >= per_class:
+        if not full_cohort and counts[0] >= per_class and counts[1] >= per_class:
             break
 
         maf_hit = _query_case_maf_file(
@@ -455,7 +458,7 @@ def _select_gene_subset(
         checked += 1
         is_positive = _maf_has_gene_variant(maf_path, gene_upper)
         label = 1 if is_positive else 0
-        if counts[label] >= per_class:
+        if not full_cohort and counts[label] >= per_class:
             continue
 
         candidates = [r for r in by_patient[patient_id] if r.sample_type is not None and int(r.sample_type) < 10]
@@ -479,10 +482,23 @@ def _select_gene_subset(
         counts[label] += 1
 
         if checked % 10 == 0:
-            print(
-                f"[labels] scanned cases={checked} selected pos={counts[1]} neg={counts[0]} "
-                f"(target per_class={per_class})"
+            if full_cohort:
+                print(f"[labels] scanned cases={checked} labeled pos={counts[1]} neg={counts[0]}")
+            else:
+                print(
+                    f"[labels] scanned cases={checked} selected pos={counts[1]} neg={counts[0]} "
+                    f"(target per_class={per_class})"
+                )
+
+    if full_cohort:
+        if not selected:
+            raise ValueError(f"No labeled cases found for {gene_upper} in {project_id}.")
+        if counts[0] == 0 or counts[1] == 0:
+            raise ValueError(
+                f"Full-cohort labeling found only one class for {gene_upper} in {project_id} "
+                f"(pos={counts[1]} neg={counts[0]})."
             )
+        return sorted(selected, key=lambda r: (r.label_index, r.size, r.filename))
 
     if counts[0] < per_class or counts[1] < per_class:
         raise ValueError(
@@ -693,15 +709,19 @@ def _load_impact_manifest_balanced(
     if labeled.empty:
         raise ValueError(f"No usable IMPACT labels found for {gene_col} (need Positive/Negative).")
 
-    pos = labeled.loc[labeled["label_index"] == 1]
-    neg = labeled.loc[labeled["label_index"] == 0]
-    take_pos = min(len(pos), int(per_class))
-    take_neg = min(len(neg), int(per_class))
-    if take_pos == 0 or take_neg == 0:
-        raise ValueError(f"IMPACT selection needs both classes; found pos={len(pos)} neg={len(neg)} for {gene_col}.")
-
-    picked = pd.concat([pos.head(take_pos), neg.head(take_neg)], ignore_index=True)
-    picked = picked.sample(frac=1.0, random_state=1337).reset_index(drop=True)
+    per_class = int(per_class)
+    full_cohort = per_class <= 0
+    if full_cohort:
+        picked = labeled.sample(frac=1.0, random_state=1337).reset_index(drop=True)
+    else:
+        pos = labeled.loc[labeled["label_index"] == 1]
+        neg = labeled.loc[labeled["label_index"] == 0]
+        take_pos = min(len(pos), int(per_class))
+        take_neg = min(len(neg), int(per_class))
+        if take_pos == 0 or take_neg == 0:
+            raise ValueError(f"IMPACT selection needs both classes; found pos={len(pos)} neg={len(neg)} for {gene_col}.")
+        picked = pd.concat([pos.head(take_pos), neg.head(take_neg)], ignore_index=True)
+        picked = picked.sample(frac=1.0, random_state=1337).reset_index(drop=True)
 
     rows: List[Dict[str, object]] = []
     for _, row in picked.iterrows():
@@ -745,7 +765,12 @@ def main() -> int:
     parser.add_argument("--run-name", default="tcga_luad_kras_cv_smoke_test", help="Run name under --output")
     parser.add_argument("--project-id", default="TCGA-LUAD", help="TCGA project id (default: TCGA-LUAD)")
     parser.add_argument("--gene", default="KRAS", help="Gene to label (default: KRAS)")
-    parser.add_argument("--per-class", type=int, default=5, help="Slides per class (default: 5 -> 10 total)")
+    parser.add_argument(
+        "--per-class",
+        type=int,
+        default=5,
+        help="Slides per class (default: 5 -> 10 total). Use 0 to label and use all available cases (very large).",
+    )
     parser.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     parser.add_argument("--patience", type=int, default=50, help="Early stopping patience (default: 50)")
     parser.add_argument("--tile-size", type=int, default=224)
@@ -775,7 +800,12 @@ def main() -> int:
         default="/data1/vanderbc/foundation_model_training_images/IMPACT",
         help="IMPACT root directory containing cohort subdirs",
     )
-    parser.add_argument("--impact-per-class", type=int, default=5, help="IMPACT cases per class (default: 5)")
+    parser.add_argument(
+        "--impact-per-class",
+        type=int,
+        default=5,
+        help="IMPACT cases per class for external inference (default: 5). Use 0 to run all labeled cases (very large).",
+    )
     parser.add_argument("--allow-non-dx", action="store_true", help="Include non-diagnostic slides (disable -00-DX filter)")
     parser.add_argument("--force", action="store_true", help="Overwrite an existing run directory")
     parser.add_argument(
