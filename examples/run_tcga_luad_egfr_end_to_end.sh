@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# End-to-end TCGA-LUAD → IMPACT (EGFR) example.
+# This runs in the foreground (not nohup); use RUN_MODE=resume to pick up partial runs.
+
 REPO_ROOT="${REPO_ROOT:-/data1/vanderbc/vanderbc/GOLDMARK}"
 cd "${REPO_ROOT}"
 
@@ -13,48 +16,43 @@ if [[ "${SKIP_ENV_SETUP:-0}" != "1" ]]; then
   conda activate running_ft
 fi
 
-# Output configuration
-RUNS_ROOT="${RUNS_ROOT:-${REPO_ROOT}/runs}"
+# Load tokens if present.
+if [[ -f "${REPO_ROOT}/configs/secrets.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/configs/secrets.env"
+  set +a
+fi
 
-# Run mode:
-# - force   : wipe existing run dir and start over (default)
-# - resume  : reuse existing run dir + manifests; continue from existing outputs
-# - rebuild : preserve smoke_data, rebuild tiling/features/training/inference
-RUN_MODE="${RUN_MODE:-force}"
-EXTRA_ARGS=()
-case "${RUN_MODE}" in
-  force)
-    EXTRA_ARGS+=(--force)
-    ;;
-  resume)
-    EXTRA_ARGS+=(--resume)
-    ;;
-  rebuild)
-    EXTRA_ARGS+=(--rebuild)
-    ;;
-  *)
-    echo "ERROR: Unknown RUN_MODE='${RUN_MODE}'. Use force|resume|rebuild." >&2
-    exit 3
-    ;;
-esac
-
-# Pipeline knobs (override via env)
 PROJECT_ID="${PROJECT_ID:-TCGA-LUAD}"
-RUN_NAME="${RUN_NAME:-${PROJECT_ID}}"
-GENE="${GENE:-KRAS}"
+GENE="${GENE:-EGFR}"
 ENCODER="${ENCODER:-h-optimus-0}"
 DEVICE="${DEVICE:-cuda}"
+RUNS_ROOT="${RUNS_ROOT:-${REPO_ROOT}/runs}"
+RUN_NAME="${RUN_NAME:-${PROJECT_ID}}"
+
+# 20x + 40x tiling by default.
 TARGET_MPP="${TARGET_MPP:-0.5}"
-EXTRA_TARGET_MPP="${EXTRA_TARGET_MPP:-}"
+EXTRA_TARGET_MPP="${EXTRA_TARGET_MPP:-0.25}"
+
 PER_CLASS="${PER_CLASS:-0}"
 IMPACT_PER_CLASS="${IMPACT_PER_CLASS:-0}"
 LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-10}"
 PATIENCE="${PATIENCE:-50}"
+RUN_MODE="${RUN_MODE:-force}"  # force|resume|rebuild
 
-TILING_ARGS=("--target-mpp" "${TARGET_MPP}")
+EXTRA_ARGS=()
+case "${RUN_MODE}" in
+  force)   EXTRA_ARGS+=(--force) ;;
+  resume)  EXTRA_ARGS+=(--resume) ;;
+  rebuild) EXTRA_ARGS+=(--rebuild) ;;
+  *) echo "ERROR: Unknown RUN_MODE='${RUN_MODE}'. Use force|resume|rebuild." >&2; exit 3 ;;
+esac
+
+TILING_ARGS=(--target-mpp "${TARGET_MPP}")
 if [[ -n "${EXTRA_TARGET_MPP}" ]]; then
-  TILING_ARGS+=("--extra-target-mpp" "${EXTRA_TARGET_MPP}")
+  TILING_ARGS+=(--extra-target-mpp "${EXTRA_TARGET_MPP}")
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-/data1/vanderbc/vanderbc/anaconda3/envs/running_ft/bin/python}"
@@ -69,13 +67,7 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   fi
 fi
 
-STAMP="$(date +%Y%m%dT%H%M%S)"
-LOG_FILE="${RUNS_ROOT}/${RUN_NAME}_nohup_${STAMP}.out"
-PID_FILE="${RUNS_ROOT}/${RUN_NAME}_nohup.pid"
-
-mkdir -p "${RUNS_ROOT}"
-
-PYTHONUNBUFFERED=1 nohup "${PYTHON_BIN}" scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+"${PYTHON_BIN}" scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
   --output "${RUNS_ROOT}" \
   --run-name "${RUN_NAME}" \
   --project-id "${PROJECT_ID}" \
@@ -88,9 +80,4 @@ PYTHONUNBUFFERED=1 nohup "${PYTHON_BIN}" scripts/tcga_luad_kras_cv_to_impact_smo
   --limit-tiles "${LIMIT_TILES}" \
   --epochs "${EPOCHS}" \
   --patience "${PATIENCE}" \
-  "${EXTRA_ARGS[@]}" \
-  > "${LOG_FILE}" 2>&1 &
-
-echo $! > "${PID_FILE}"
-echo "[info] Started PID=$(cat "${PID_FILE}")"
-echo "[info] Log: ${LOG_FILE}"
+  "${EXTRA_ARGS[@]}"

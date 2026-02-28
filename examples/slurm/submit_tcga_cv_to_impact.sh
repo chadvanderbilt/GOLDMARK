@@ -54,7 +54,6 @@ fi
 
 # Output configuration
 RUNS_ROOT="${RUNS_ROOT:-${REPO_ROOT}/runs}"
-RUN_NAME="${RUN_NAME:-tcga_cv_to_impact}"
 
 # Run mode:
 # - force   : wipe existing run dir and start over (default)
@@ -80,14 +79,22 @@ esac
 
 # Pipeline knobs (override via env)
 PROJECT_ID="${PROJECT_ID:-TCGA-LUAD}"
+RUN_NAME="${RUN_NAME:-${PROJECT_ID}}"
 GENE="${GENE:-KRAS}"
 ENCODER="${ENCODER:-h-optimus-0}"
 DEVICE="${DEVICE:-cuda}"
+TARGET_MPP="${TARGET_MPP:-0.5}"
+EXTRA_TARGET_MPP="${EXTRA_TARGET_MPP:-}"
 PER_CLASS="${PER_CLASS:-0}"
 IMPACT_PER_CLASS="${IMPACT_PER_CLASS:-0}"
 LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-10}"
 PATIENCE="${PATIENCE:-50}"
+
+TILING_ARGS=("--target-mpp" "${TARGET_MPP}")
+if [[ -n "${EXTRA_TARGET_MPP}" ]]; then
+  TILING_ARGS+=("--extra-target-mpp" "${EXTRA_TARGET_MPP}")
+fi
 
 "${PYTHON_BIN}" scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
   --output "${RUNS_ROOT}" \
@@ -98,6 +105,7 @@ PATIENCE="${PATIENCE:-50}"
   --impact-per-class "${IMPACT_PER_CLASS}" \
   --encoder "${ENCODER}" \
   --device "${DEVICE}" \
+  "${TILING_ARGS[@]}" \
   --limit-tiles "${LIMIT_TILES}" \
   --epochs "${EPOCHS}" \
   --patience "${PATIENCE}" \

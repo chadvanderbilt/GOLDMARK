@@ -75,6 +75,9 @@ def run_tiling(args: argparse.Namespace) -> None:
     paths = PipelinePaths(args.output, args.run_name, stage="tiling")
     paths.ensure()
 
+    tiles_dir = Path(args.tiles_dir).expanduser().resolve() if getattr(args, "tiles_dir", None) else paths.tiles_dir
+    tiles_dir.mkdir(parents=True, exist_ok=True)
+
     tiler = SlideTiler(
         TilingConfig(
             tile_size=args.tile_size,
@@ -83,7 +86,7 @@ def run_tiling(args: argparse.Namespace) -> None:
             save_tiles=args.save_tiles,
             limit_tiles=args.limit_tiles,
         ),
-        output_dir=paths.tiles_dir,
+        output_dir=tiles_dir,
         log_level=args.log_level,
     )
 
@@ -92,7 +95,7 @@ def run_tiling(args: argparse.Namespace) -> None:
         raw_slide_id = getattr(row, args.slide_id_column)
         tile_slide_id = canonicalize_slide_id(raw_slide_id)
         tiler.tile_slide(slide_path, tile_slide_id)
-    print(f"Tile manifests saved under {paths.tiles_dir}")
+    print(f"Tile manifests saved under {tiles_dir}")
 
 
 def run_features(args: argparse.Namespace) -> None:
@@ -489,6 +492,10 @@ def build_parser() -> argparse.ArgumentParser:
     tiling_parser.add_argument("--tile-size", type=int, default=224)
     tiling_parser.add_argument("--stride", type=int, default=224)
     tiling_parser.add_argument("--target-mpp", type=float, default=0.5)
+    tiling_parser.add_argument(
+        "--tiles-dir",
+        help="Optional override for the tiling output directory (default: <runs>/<run-name>/tiling/tiles).",
+    )
     tiling_parser.add_argument("--limit-tiles", type=int)
     tiling_parser.add_argument("--save-tiles", action="store_true")
     tiling_parser.set_defaults(func=run_tiling)

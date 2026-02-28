@@ -35,6 +35,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,7 @@ if str(REPO_ROOT) not in sys.path:
 from goldmark.cli import main as goldmark_main  # noqa: E402
 from goldmark.inference import InferenceConfig, InferenceRunner  # noqa: E402
 from goldmark.utils.secrets import load_secrets_env  # noqa: E402
+from goldmark.utils.slide_ids import canonicalize_slide_id  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,254 @@ def _gdc_in_filter(field: str, values: Sequence[str]) -> Dict[str, Any]:
 
 def _gdc_and_filter(items: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     return {"op": "and", "content": [item for item in items if item]}
+
+
+def _mpp_slug(value: float) -> str:
+    text = f"{float(value):.4f}".rstrip("0").rstrip(".")
+    return text.replace(".", "p")
+
+
+def _mpp_label(value: float) -> str:
+    if abs(float(value) - 0.5) < 1e-6:
+        return "20x"
+    if abs(float(value) - 0.25) < 1e-6:
+        return "40x"
+    return f"mpp_{_mpp_slug(value)}"
+
+
+def _parse_extra_target_mpp(raw: str) -> List[float]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+    values: List[float] = []
+    for part in parts:
+        value = float(part)
+        if value <= 0:
+            raise ValueError(f"Invalid target-mpp value: {part}")
+        values.append(value)
+    return values
+
+
+def _mpp_tiles_dir(run_dir: Path, value: float) -> Path:
+    return run_dir / "tiling" / f"tiles_{_mpp_label(value)}"
+
+
+def _ensure_alias_dir(alias: Path, target: Path, *, label: str) -> None:
+    if alias.exists() or alias.is_symlink():
+        return
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError:
+        alias.mkdir(parents=True, exist_ok=True)
+        (alias / "LOCATION.txt").write_text(f"{label} -> {target}\n")
+
+
+def _tile_coords_path(run_dir: Path, value: float) -> Path:
+    label = _mpp_label(value)
+    if label in {"20x", "40x"}:
+        return run_dir / "tiling" / f"tile_coords_{label}.csv"
+    return run_dir / "tiling" / f"tile_coords_{label}.csv"
+
+
+def _rel_slide_path(raw: str, run_dir: Path) -> str:
+    if not raw:
+        return ""
+    value = str(raw).strip()
+    if not value:
+        return ""
+    path = Path(value)
+    if not path.is_absolute():
+        return value
+    try:
+        rel = path.resolve().relative_to(run_dir.resolve())
+    except Exception:
+        return value
+    return f"./{rel.as_posix()}"
+
+
+def _load_slide_index(slide_manifest: Path, run_dir: Path, project_id: str) -> Tuple[Dict[str, Dict[str, str]], List[Dict[str, str]]]:
+    mapping: Dict[str, Dict[str, str]] = {}
+    manifest_rows: List[Dict[str, str]] = []
+    with slide_manifest.open("r", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            raw_slide_id = (row.get("slide_id") or "").strip()
+            if not raw_slide_id:
+                continue
+            slide_id = canonicalize_slide_id(raw_slide_id)
+            patient_id = (row.get("patient_id") or "").strip()
+            sample_id = f"{patient_id}_{slide_id}" if patient_id else slide_id
+            slide_path = _rel_slide_path(row.get("slide_path") or "", run_dir)
+            file_name = Path(row.get("slide_path") or "").name if row.get("slide_path") else ""
+            manifest_rows.append(
+                {
+                    "file_name": file_name,
+                    "sample_id": sample_id,
+                    "target": str(project_id),
+                    "slide_path": slide_path,
+                }
+            )
+            mapping[slide_id] = {"sample_id": sample_id, "slide": slide_path}
+    return mapping, manifest_rows
+
+
+def _write_tiling_manifest(run_dir: Path, rows: List[Dict[str, str]], *, resume: bool) -> Path:
+    out_path = run_dir / "tiling" / "tiling_manifest.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.exists():
+        existing_rows: List[Dict[str, str]] = []
+        existing_ids: set[str] = set()
+        with out_path.open("r", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                sample_id = (row.get("sample_id") or "").strip()
+                if sample_id:
+                    existing_ids.add(sample_id)
+                existing_rows.append(row)
+        added = [row for row in rows if (row.get("sample_id") or "").strip() not in existing_ids]
+        if not added:
+            return out_path
+        with out_path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["file_name", "sample_id", "target", "slide_path"])
+            writer.writeheader()
+            writer.writerows(existing_rows + added)
+        return out_path
+    with out_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["file_name", "sample_id", "target", "slide_path"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return out_path
+
+
+def _write_tile_coords(
+    tile_dir: Path,
+    out_path: Path,
+    slide_index: Dict[str, Dict[str, str]],
+    *,
+    project_id: str,
+    resume: bool,
+) -> None:
+    manifest_dir = tile_dir / "manifests"
+    if not manifest_dir.exists():
+        return
+    if resume and out_path.exists() and out_path.stat().st_size > 0:
+        print(f"[resume] Tile coords already present: {out_path}")
+        return
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["x", "y", "slide", "sample_id", "target"])
+        writer.writeheader()
+        for manifest_path in sorted(manifest_dir.glob("*_tiles.csv")):
+            slide_id = manifest_path.name.replace("_tiles.csv", "")
+            info = slide_index.get(slide_id, {})
+            sample_id = info.get("sample_id", slide_id)
+            slide_path = info.get("slide", "")
+            with manifest_path.open("r", newline="") as in_handle:
+                reader = csv.DictReader(in_handle)
+                for row in reader:
+                    writer.writerow(
+                        {
+                            "x": row.get("x"),
+                            "y": row.get("y"),
+                            "slide": slide_path,
+                            "sample_id": sample_id,
+                            "target": str(project_id),
+                        }
+                    )
+def _case_column_from_manifest(df) -> Optional[str]:
+    for col in ("patient_id", "case_id", "group_id", "sample_id"):
+        if col in df.columns:
+            return col
+    return None
+
+
+def _safe_case_slug(case_id: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(case_id or "").strip())
+    return slug.strip("_") or "case"
+
+
+def _write_case_tile_manifests(tile_dir: Path, slide_manifest: Path, *, resume: bool) -> None:
+    import pandas as pd
+
+    manifest_dir = tile_dir / "manifests"
+    if not manifest_dir.exists():
+        return
+
+    case_dir = tile_dir / "cases"
+    case_dir.mkdir(parents=True, exist_ok=True)
+    if resume and any(case_dir.glob("*_tiles.csv")):
+        print(f"[resume] Case-level manifests already present: {case_dir}")
+        return
+
+    slide_df = pd.read_csv(slide_manifest)
+    if "slide_id" not in slide_df.columns:
+        raise ValueError(f"slide_manifest missing slide_id column: {slide_manifest}")
+    case_col = _case_column_from_manifest(slide_df)
+    if not case_col:
+        print("[warn] No case column found in slide manifest; falling back to slide_id for case_id.")
+
+    slide_to_case: Dict[str, str] = {}
+    for row in slide_df.itertuples():
+        raw_slide_id = getattr(row, "slide_id")
+        slide_id = canonicalize_slide_id(raw_slide_id)
+        case_id = slide_id
+        if case_col:
+            case_value = getattr(row, case_col)
+            if case_value is not None and str(case_value).strip():
+                case_id = str(case_value).strip()
+        slide_to_case[slide_id] = case_id
+
+    fieldnames = [
+        "case_id",
+        "slide_id",
+        "tile_id",
+        "x",
+        "y",
+        "level",
+        "width",
+        "height",
+        "tissue_fraction",
+        "tile_path",
+    ]
+
+    case_index: Dict[str, Path] = {}
+    for slide_manifest_path in sorted(manifest_dir.glob("*_tiles.csv")):
+        slide_id = slide_manifest_path.name.replace("_tiles.csv", "")
+        case_id = slide_to_case.get(slide_id, slide_id)
+        case_slug = _safe_case_slug(case_id)
+        case_manifest_path = case_dir / f"{case_slug}_tiles.csv"
+        write_header = not case_manifest_path.exists()
+        case_index[case_id] = case_manifest_path
+
+        with slide_manifest_path.open("r", newline="") as handle_in, case_manifest_path.open("a", newline="") as handle_out:
+            reader = csv.DictReader(handle_in)
+            writer = csv.DictWriter(handle_out, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+            for row in reader:
+                writer.writerow(
+                    {
+                        "case_id": case_id,
+                        "slide_id": slide_id,
+                        "tile_id": row.get("tile_id"),
+                        "x": row.get("x"),
+                        "y": row.get("y"),
+                        "level": row.get("level"),
+                        "width": row.get("width"),
+                        "height": row.get("height"),
+                        "tissue_fraction": row.get("tissue_fraction"),
+                        "tile_path": row.get("tile_path"),
+                    }
+                )
+
+    index_path = case_dir / "cases_index.csv"
+    with index_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["case_id", "case_manifest"])
+        writer.writeheader()
+        for case_id, path in sorted(case_index.items()):
+            writer.writerow({"case_id": case_id, "case_manifest": str(path)})
+    print(f"[cases] Case-level manifests written under {case_dir}")
 
 
 def _query_case_maf_file(
@@ -762,7 +1012,7 @@ def _pick_best_split(cv_summary_path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="runs", help="Pipeline output root (default: runs/)")
-    parser.add_argument("--run-name", default="tcga_luad_kras_cv_smoke_test", help="Run name under --output")
+    parser.add_argument("--run-name", default="", help="Project folder name under --output (default: --project-id)")
     parser.add_argument("--project-id", default="TCGA-LUAD", help="TCGA project id (default: TCGA-LUAD)")
     parser.add_argument("--gene", default="KRAS", help="Gene to label (default: KRAS)")
     parser.add_argument(
@@ -776,6 +1026,11 @@ def main() -> int:
     parser.add_argument("--tile-size", type=int, default=224)
     parser.add_argument("--stride", type=int, default=224)
     parser.add_argument("--target-mpp", type=float, default=0.5)
+    parser.add_argument(
+        "--extra-target-mpp",
+        default="0.25",
+        help="Comma-separated extra target-mpp values to tile within the same run (default: 0.25 for 40x).",
+    )
     parser.add_argument("--limit-tiles", type=int, default=2048)
     parser.add_argument("--encoder", default="h-optimus-0")
     parser.add_argument("--device", default="auto", help="Feature/training device (default: auto)")
@@ -820,6 +1075,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if not args.run_name:
+        args.run_name = str(args.project_id)
+
     os.chdir(REPO_ROOT)
 
     secrets_path = Path(str(args.secrets_env)).expanduser()
@@ -847,13 +1105,19 @@ def main() -> int:
                 f"Run directory already exists: {run_dir} (use --resume to continue, --rebuild to rerun stages, or --force to overwrite)"
             )
 
-    data_dir = run_dir / "smoke_data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    full_manifest = data_dir / f"{args.project_id}_svs_manifest.tsv"
-    subset_manifest = data_dir / f"{args.project_id}_svs_manifest_subset.tsv"
-    slide_manifest = data_dir / f"tcga_{str(args.project_id).lower()}_{str(args.gene).lower()}_slides.csv"
-    svs_download_dir = data_dir / "gdc_download_svs"
-    maf_download_dir = data_dir / "gdc_download_maf"
+    gene_upper = str(args.gene).strip().upper()
+    checkpoints_root = run_dir / "training" / "checkpoints"
+    target_dir = checkpoints_root / gene_upper
+    target_manifest_dir = target_dir / "manifests"
+    target_manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    gdc_root = run_dir / "gdc_downloads"
+    gdc_root.mkdir(parents=True, exist_ok=True)
+    full_manifest = gdc_root / f"{args.project_id}_svs_manifest.tsv"
+    subset_manifest = target_manifest_dir / f"{args.project_id}_{gene_upper}_svs_manifest_subset.tsv"
+    slide_manifest = target_manifest_dir / f"{args.project_id}_{gene_upper}_slides.csv"
+    svs_download_dir = gdc_root / "svs"
+    maf_download_dir = gdc_root / "maf"
 
     if (args.resume or args.rebuild) and slide_manifest.exists():
         print(f"[resume] Using existing slide manifest: {slide_manifest}")
@@ -925,9 +1189,10 @@ def main() -> int:
     if not slide_manifest.exists():
         raise FileNotFoundError(f"Slide manifest missing: {slide_manifest}")
 
+    slide_index, tiling_manifest_rows = _load_slide_index(slide_manifest, run_dir, str(args.project_id))
+    _write_tiling_manifest(run_dir, tiling_manifest_rows, resume=bool(args.resume))
+
     # Versioned split manifest lives alongside training outputs (matches manuscript layout).
-    gene_upper = str(args.gene).strip().upper()
-    target_dir = run_dir / "training" / "checkpoints" / gene_upper
     split_manifest_dir = target_dir / "versioned_split_manifest"
     split_manifest_dir.mkdir(parents=True, exist_ok=True)
     split_manifest = split_manifest_dir / f"{gene_upper}_all_splits_latest.csv"
@@ -992,6 +1257,7 @@ def main() -> int:
     print(f"[tcga] Versioned split manifest: {split_manifest}")
 
     # Stage 1: tiling
+    base_tiles_dir = _mpp_tiles_dir(run_dir, args.target_mpp)
     _run_goldmark(
         [
             "tiling",
@@ -1006,13 +1272,63 @@ def main() -> int:
             str(int(args.stride)),
             "--target-mpp",
             str(float(args.target_mpp)),
+            "--tiles-dir",
+            str(base_tiles_dir),
             "--limit-tiles",
             str(int(args.limit_tiles)),
         ]
     )
-    tile_dir = run_dir / "tiling" / "tiles"
+    tile_dir = base_tiles_dir
+    _ensure_alias_dir(run_dir / "tiling" / "tiles", tile_dir, label="tiling")
+    _write_case_tile_manifests(tile_dir, slide_manifest, resume=bool(args.resume))
+    _write_tile_coords(
+        tile_dir,
+        _tile_coords_path(run_dir, args.target_mpp),
+        slide_index,
+        project_id=str(args.project_id),
+        resume=bool(args.resume),
+    )
+
+    extra_target_mpp = _parse_extra_target_mpp(args.extra_target_mpp)
+    for extra_mpp in extra_target_mpp:
+        if abs(float(extra_mpp) - float(args.target_mpp)) < 1e-6:
+            continue
+        extra_tiles_dir = _mpp_tiles_dir(run_dir, extra_mpp)
+        extra_manifest_dir = extra_tiles_dir / "manifests"
+        if args.resume and extra_manifest_dir.exists() and any(extra_manifest_dir.glob("*_tiles.csv")):
+            print(f"[resume] Extra tiling already present: {extra_tiles_dir}")
+            continue
+        _run_goldmark(
+            [
+                "tiling",
+                str(split_manifest),
+                "--output",
+                str(output_root),
+                "--run-name",
+                str(args.run_name),
+                "--tile-size",
+                str(int(args.tile_size)),
+                "--stride",
+                str(int(args.stride)),
+                "--target-mpp",
+                str(float(extra_mpp)),
+                "--tiles-dir",
+                str(extra_tiles_dir),
+                "--limit-tiles",
+                str(int(args.limit_tiles)),
+            ]
+        )
+        _write_case_tile_manifests(extra_tiles_dir, slide_manifest, resume=bool(args.resume))
+        _write_tile_coords(
+            extra_tiles_dir,
+            _tile_coords_path(run_dir, extra_mpp),
+            slide_index,
+            project_id=str(args.project_id),
+            resume=bool(args.resume),
+        )
 
     # Stage 2: features
+    feature_scope = "missing" if args.resume and not args.rebuild else "all"
     _run_goldmark(
         [
             "features",
@@ -1033,9 +1349,46 @@ def main() -> int:
             "4",
             "--tile-size",
             str(int(args.tile_size)),
+            "--scope",
+            feature_scope,
         ]
     )
     feature_dir = run_dir / "features" / str(args.encoder)
+    base_label = _mpp_label(args.target_mpp)
+    if base_label in ("20x", "40x"):
+        _ensure_alias_dir(run_dir / "features" / f"{args.encoder}_{base_label}", feature_dir, label="features")
+
+    for extra_mpp in extra_target_mpp:
+        if abs(float(extra_mpp) - float(args.target_mpp)) < 1e-6:
+            continue
+        extra_tiles_dir = _mpp_tiles_dir(run_dir, extra_mpp)
+        extra_encoder_name = f"{args.encoder}_{_mpp_label(extra_mpp)}"
+        _run_goldmark(
+            [
+                "features",
+                str(split_manifest),
+                "--tile-manifests",
+                str(extra_tiles_dir),
+                "--output",
+                str(output_root),
+                "--run-name",
+                str(args.run_name),
+                "--encoder",
+                str(args.encoder),
+                "--encoder-output-name",
+                extra_encoder_name,
+                "--device",
+                str(args.device),
+                "--batch-size",
+                "32",
+                "--num-workers",
+                "4",
+                "--tile-size",
+                str(int(args.tile_size)),
+                "--scope",
+                feature_scope,
+            ]
+        )
 
     # Stage 3: 5-split cross-validation training
     _run_goldmark(
@@ -1072,6 +1425,7 @@ def main() -> int:
             *split_columns,
         ]
     )
+    _ensure_alias_dir(run_dir / "checkpoints", run_dir / "training" / "checkpoints", label="checkpoints")
 
     cv_summary = run_dir / "training" / "checkpoints" / "classification_report" / "cv_summary.csv"
     if not cv_summary.exists():
@@ -1122,7 +1476,7 @@ def main() -> int:
         encoder=str(args.encoder),
         per_class=int(args.impact_per_class),
     )
-    impact_out_manifest = data_dir / f"impact_external_{gene_upper}_{args.encoder}.csv"
+    impact_out_manifest = target_manifest_dir / f"impact_external_{gene_upper}_{args.encoder}.csv"
     pd.DataFrame(impact_rows).to_csv(impact_out_manifest, index=False)
     print(f"[impact] External manifest: {impact_out_manifest} (rows={len(impact_rows)})")
 

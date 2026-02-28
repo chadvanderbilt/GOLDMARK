@@ -71,6 +71,7 @@ pathway and validate **reciprocal external inference** (TCGA→IMPACT):
 
 What it does:
 - Downloads **10 TCGA-LUAD diagnostic** slides via GDC (filters to `-00-DX` unless `--allow-non-dx`)
+- **Only downloads slides with targets**: the script labels cases using MAFs, then builds a subset manifest and downloads only those labeled slides.
 - Labels each patient as KRAS **positive/negative** from the GDC **Masked Somatic Mutation** MAF
 - Builds **5 independent** 70/30 splits with per-split `val` assignments (train/val/test stored as columns)
 - Trains for a small number of epochs (default: 10) and writes a `cv_summary.csv`
@@ -99,7 +100,6 @@ These are not hard-coded to a specific project or gene.
 PROJECT_ID=TCGA-LUAD \
 GENE=EGFR \
 ENCODER=h-optimus-0 \
-RUN_NAME=tcga_luad_egfr_cv_to_impact_full \
 RUN_MODE=resume \
 sbatch examples/slurm/submit_tcga_cv_to_impact.sh
 ```
@@ -114,7 +114,6 @@ Notes for SLURM users:
 PROJECT_ID=TCGA-LUAD \
 GENE=EGFR \
 ENCODER=h-optimus-0 \
-RUN_NAME=tcga_luad_egfr_cv_to_impact_full \
 RUN_MODE=resume \
 bash scripts/nohup_tcga_cv_to_impact.sh
 
@@ -122,41 +121,70 @@ bash scripts/nohup_tcga_cv_to_impact.sh
 tail -f runs/<run-name>_nohup_*.out
 ```
 
+**End-to-end example (foreground)** — `examples/run_tcga_luad_egfr_end_to_end.sh`
+
+```bash
+RUN_MODE=force \
+TARGET_MPP=0.5 \
+EXTRA_TARGET_MPP=0.25 \
+bash examples/run_tcga_luad_egfr_end_to_end.sh
+```
+
 **Options (env vars)**
 - `PROJECT_ID` (default: `TCGA-LUAD`)
 - `GENE` (default: `KRAS`)
 - `ENCODER` (default: `h-optimus-0`)
 - `DEVICE` (default: `cuda`)
-- `RUN_NAME` (default: `tcga_cv_to_impact`)
+- `TARGET_MPP` (default: `0.5`)
+- `EXTRA_TARGET_MPP` (default: `0.25`; comma-separated for additional MPPs)
+- `RUN_NAME` (default: `${PROJECT_ID}`)
 - `RUN_MODE` in `{force|resume|rebuild}` (default: `force`)
 - `PER_CLASS`, `IMPACT_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`
 
+By default, `RUN_NAME` is set to the project id so all outputs live under `runs/<project-id>/`.
+
 #### Output layout (important files and where to find them)
 
-All outputs land under `runs/<run-name>/`.
+All outputs land under `runs/<project-id>/` (the default `RUN_NAME` is the project id).
 
-**A) Smoke-test inputs (download + derived labels)**
-- `runs/<run-name>/smoke_data/TCGA-LUAD_svs_manifest.tsv` — full GDC SVS manifest for the project
-- `runs/<run-name>/smoke_data/TCGA-LUAD_svs_manifest_subset.tsv` — the 10 selected diagnostic SVS rows
-- `runs/<run-name>/smoke_data/gdc_download_svs/**/**.svs` — downloaded TCGA SVS files (GDC UUID folders)
-- `runs/<run-name>/smoke_data/gdc_download_maf/**/**.maf.gz` — downloaded GDC mutation calls used for labels
-- `runs/<run-name>/smoke_data/tcga_tcga-luad_kras_slides.csv` — selected slide list + labels (schema below)
-- `runs/<run-name>/smoke_data/impact_external_KRAS_<encoder>.csv` — external IMPACT subset manifest (schema below)
+**A) Project inputs (download + derived labels)**
+- `runs/<project-id>/gdc_downloads/<PROJECT>_svs_manifest.tsv` — full GDC SVS manifest for the project
+- `runs/<project-id>/gdc_downloads/svs/**/**.svs` — downloaded TCGA SVS files (GDC UUID folders)
+- `runs/<project-id>/gdc_downloads/maf/**/**.maf.gz` — downloaded GDC mutation calls used for labels
+- `runs/<project-id>/checkpoints/<TARGET>/manifests/<PROJECT>_<TARGET>_svs_manifest_subset.tsv` — selected SVS rows
+- `runs/<project-id>/checkpoints/<TARGET>/manifests/<PROJECT>_<TARGET>_slides.csv` — selected slide list + labels (schema below)
+- `runs/<project-id>/checkpoints/<TARGET>/manifests/impact_external_<TARGET>_<encoder>.csv` — external IMPACT subset manifest (schema below)
 
 **B) Tiling**
-- `runs/<run-name>/tiling/tiles/manifests/<slide_id>_tiles.csv` — per-slide tile coordinate manifest (schema below)
+- `runs/<project-id>/tiling/tiles_20x/manifests/<slide_id>_tiles.csv` — per-slide tile coordinate manifest (schema below)
+- `runs/<project-id>/tiling/tiles_20x/cases/<case_id>_tiles.csv` — per-case tile coordinates aggregated across slides
+- `runs/<project-id>/tiling/tiles_20x/cases/cases_index.csv` — case_id → case manifest path index
+- `runs/<project-id>/tiling/tiles` — alias pointing at `tiles_20x` for compatibility
+- `runs/<project-id>/tiling/tile_coords_20x.csv` — aggregated tile coords (x,y,slide,sample_id,target)
+- `runs/<project-id>/tiling/tiling_manifest.csv` — slide inventory (file_name,sample_id,target,slide_path)
+
+When `EXTRA_TARGET_MPP` is set, the additional tiling pass writes to:
+- `runs/<project-id>/tiling/tiles_40x/manifests/<slide_id>_tiles.csv` (for `EXTRA_TARGET_MPP=0.25`)
+- `runs/<project-id>/tiling/tiles_40x/cases/<case_id>_tiles.csv`
+- `runs/<project-id>/tiling/tile_coords_40x.csv` (for `EXTRA_TARGET_MPP=0.25`)
+- `runs/<project-id>/tiling/tiles_mpp_<value>/...` for any other MPP
 
 **C) Features + QC**
-- `runs/<run-name>/features/<encoder>/features_<slide_id>.pt` — per-slide feature tensor (N tiles × D)
-- `runs/<run-name>/features/<encoder>/features_<slide_id>.json` — QC metadata + checksums (schema below)
+- `runs/<project-id>/features/<encoder>/features_<slide_id>.pt` — per-slide feature tensor (N tiles × D)
+- `runs/<project-id>/features/<encoder>/features_<slide_id>.json` — QC metadata + checksums (schema below)
 - If feature extraction fails QC, tensors are renamed:
   - `features_<slide_id>.FAILED_tile_count_mismatch.pt`
   - `features_<slide_id>.FAILED_degenerate_embeddings.pt`
 
+When `EXTRA_TARGET_MPP` is set, the additional feature pass writes to:
+- `runs/<project-id>/features/<encoder>_40x/features_<slide_id>.pt` (for `EXTRA_TARGET_MPP=0.25`)
+- `runs/<project-id>/features/<encoder>_40x/features_<slide_id>.json`
+- `runs/<project-id>/features/<encoder>_mpp_<value>/...` for any other MPP
+
 **D) Training (5-fold CV)**
-- `runs/<run-name>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — the split manifest used for tiling/features/training (schema below)
-- `runs/<run-name>/training/checkpoints/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
-- `runs/<run-name>/training/checkpoints/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
+- `runs/<project-id>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — the split manifest used for tiling/features/training (schema below)
+- `runs/<project-id>/training/checkpoints/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
+- `runs/<project-id>/training/checkpoints/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
 
 **E) Per-split held-out test inference (attention export + ROC/PR plots)**
 
