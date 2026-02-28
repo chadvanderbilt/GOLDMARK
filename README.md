@@ -21,6 +21,14 @@ Downloads a tiny subset of **real TCGA SVS slides** via **GDC** and runs:
 This is a real-data run (WSI deps + OpenSlide required). Even with a small subset, expect **multiple GB**
 of downloads and non-trivial runtime.
 
+**Preflight checklist (avoid the common failure modes)**
+- Most encoders are hosted on Hugging Face; **approval + a valid HF token are required to run this pipeline**. Without access you will hit `401 Unauthorized` during feature extraction.
+- Ensure `configs/secrets.env` exists and is **sourced for non-interactive runs** (SLURM/nohup). Example: `set -a; source configs/secrets.env; set +a`
+- If you use `h-optimus-0`, your `HUGGINGFACE_HUB_TOKEN` (or `HF_TOKEN`) must have **explicit access** to `bioptimus/H-optimus-0`. A `401 Unauthorized` means the token is missing or lacks access.
+- `gdc-client` requires newer glibc on some clusters. If it fails, GOLDMARK falls back to the GDC API (no resume; slower). For full cohorts, prefer a compatible `gdc-client` or a newer node.
+- Some clusters do **not** provide `python`. Use `python3` or set `PYTHON_BIN` in the SLURM script.
+- The LUAD KRAS smoke test defaults to **10 slides** (`--per-class 5`). Use `--per-class 0` for the full cohort (very large).
+
 ```bash
 git clone https://github.com/chadvanderbilt/GOLDMARK.git
 cd GOLDMARK
@@ -78,6 +86,50 @@ python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
   --patience 50 \
   --force
 ```
+
+### Generic SLURM + nohup launchers (configurable project/gene/encoder)
+
+For GitHub users, we provide **generic** launchers that accept options via environment variables.
+These are not hard-coded to a specific project or gene.
+
+**SLURM (GPU example)** — `examples/slurm/submit_tcga_cv_to_impact.sh`
+
+```bash
+# Example: TCGA-LUAD / EGFR / h-optimus-0, resume in-place
+PROJECT_ID=TCGA-LUAD \
+GENE=EGFR \
+ENCODER=h-optimus-0 \
+RUN_NAME=tcga_luad_egfr_cv_to_impact_full \
+RUN_MODE=resume \
+sbatch examples/slurm/submit_tcga_cv_to_impact.sh
+```
+
+Notes for SLURM users:
+- You must set a **GPU-capable partition** in the script (`#SBATCH -p ...`) and match your cluster’s GPU request syntax (e.g., `--gres=gpu:1`).
+- Some clusters require different SBATCH fields (account/QoS/time/memory). Adjust the header in `examples/slurm/submit_tcga_cv_to_impact.sh` to match local policy.
+
+**nohup (interactive node)** — `scripts/nohup_tcga_cv_to_impact.sh`
+
+```bash
+PROJECT_ID=TCGA-LUAD \
+GENE=EGFR \
+ENCODER=h-optimus-0 \
+RUN_NAME=tcga_luad_egfr_cv_to_impact_full \
+RUN_MODE=resume \
+bash scripts/nohup_tcga_cv_to_impact.sh
+
+# watch
+tail -f runs/<run-name>_nohup_*.out
+```
+
+**Options (env vars)**
+- `PROJECT_ID` (default: `TCGA-LUAD`)
+- `GENE` (default: `KRAS`)
+- `ENCODER` (default: `h-optimus-0`)
+- `DEVICE` (default: `cuda`)
+- `RUN_NAME` (default: `tcga_cv_to_impact`)
+- `RUN_MODE` in `{force|resume|rebuild}` (default: `force`)
+- `PER_CLASS`, `IMPACT_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`
 
 #### Output layout (important files and where to find them)
 
@@ -189,7 +241,8 @@ Optional columns:
 Docs:
 - `docs/targets.md`
 - `docs/pipeline.md`
-- SLURM (GPU) example: `examples/slurm/submit_tcga_luad_EGFR_cv_to_impact.sh`
+- SLURM (generic): `examples/slurm/submit_tcga_cv_to_impact.sh`
+- SLURM (EGFR example): `examples/slurm/submit_tcga_luad_EGFR_cv_to_impact.sh`
 
 ## Repository layout
 
