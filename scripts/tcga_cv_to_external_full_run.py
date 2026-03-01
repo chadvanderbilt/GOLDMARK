@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end LUAD KRAS smoke test (TCGA → IMPACT) for GOLDMARK.
+"""End-to-end TCGA CV → external cohort run for GOLDMARK.
 
 This script runs what the manuscript pipeline needs to prove it works:
 
@@ -11,20 +11,20 @@ This script runs what the manuscript pipeline needs to prove it works:
      subset out of the training partition (1 positive + 1 negative when possible).
 4) Tile → extract features → train for N epochs (default: 10) across the 5 splits
 5) Run held-out test inference for each split with attention export + ROC/PR plot
-6) Pick the best split (by test ROC AUC) and run external inference on 10 IMPACT
-   LUAD cases using the KRAS column (attention export + ROC/PR plot).
+6) Pick the best split (by test ROC AUC) and run external inference on a
+   user-provided external manifest (attention export + ROC/PR plot).
 
 Notes
 -----
 - Default TCGA slide filter is diagnostic/FFPE-style barcodes containing `-00-DX`.
 - Requires tokens in `configs/secrets.env` (auto-loaded) for controlled GDC calls.
-- For encoder consistency with the IMPACT feature cache, default encoder is
-  `h-optimus-0`.
+- For encoder consistency with your external feature cache, set `--encoder`
+  to match the external feature directory.
 
 Example
 -------
-/data1/vanderbc/vanderbc/anaconda3/bin/python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \\
-  --run-name gdc_smoke_test_sandbox_api2_kras_cv \\
+/data1/vanderbc/vanderbc/anaconda3/bin/python scripts/tcga_cv_to_external_full_run.py \\
+  --run-name TCGA-LUAD \\
   --device cuda
 """
 
@@ -39,6 +39,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -190,6 +191,73 @@ def _ensure_alias_dir(alias: Path, target: Path, *, label: str) -> None:
     except OSError:
         alias.mkdir(parents=True, exist_ok=True)
         (alias / "LOCATION.txt").write_text(f"{label} -> {target}\n")
+
+
+def _ensure_target_checkpoint_root(base_root: Path, target_root: Path) -> Path:
+    base_root.mkdir(parents=True, exist_ok=True)
+    target_root.mkdir(parents=True, exist_ok=True)
+    move_candidates: List[Path] = []
+    if base_root.exists():
+        for entry in base_root.iterdir():
+            if entry.name == target_root.name:
+                continue
+            if entry.name.startswith("split_") or entry.name == "classification_report":
+                move_candidates.append(entry)
+            elif entry.is_file():
+                move_candidates.append(entry)
+    if move_candidates:
+        for entry in move_candidates:
+            dest = target_root / entry.name
+            if dest.exists():
+                continue
+            shutil.move(str(entry), str(dest))
+    return target_root
+
+
+def _download_is_complete(file_id: str, filename: str, size: int, download_root: Path) -> bool:
+    path = download_root / file_id / filename
+    if not path.exists():
+        return False
+    try:
+        existing_size = path.stat().st_size
+    except OSError:
+        return False
+    if existing_size <= 0:
+        return False
+    if size and existing_size < int(size):
+        return False
+    return True
+
+
+def _md5_matches(path: Path, expected_md5: Optional[str]) -> bool:
+    expected = str(expected_md5 or "").strip().lower()
+    if not expected:
+        return True
+    md5 = hashlib.md5()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                md5.update(chunk)
+    except OSError:
+        return False
+    digest = md5.hexdigest()
+    if digest != expected:
+        print(f"[gdc] MD5 mismatch for {path.name}: expected={expected} got={digest}")
+        return False
+    return True
+
+
+def _download_is_complete_with_md5(
+    file_id: str,
+    filename: str,
+    size: int,
+    download_root: Path,
+    expected_md5: Optional[str],
+) -> bool:
+    path = download_root / file_id / filename
+    if not _download_is_complete(file_id, filename, size, download_root):
+        return False
+    return _md5_matches(path, expected_md5)
 
 
 def _tile_coords_path(run_dir: Path, value: float) -> Path:
@@ -524,7 +592,14 @@ def _read_gdc_token(token_file: Optional[str]) -> Optional[str]:
     return None
 
 
-def _download_with_gdc_api(*, rows: List[_GdcFileRow], out_dir: Path, token_file: Optional[str]) -> None:
+def _download_with_gdc_api(
+    *,
+    rows: List[_GdcFileRow],
+    out_dir: Path,
+    token_file: Optional[str],
+    retry_amount: int = 3,
+    force_downloads: bool = False,
+) -> None:
     """Download files directly from the GDC API (fallback when gdc-client is unavailable)."""
     import requests
 
@@ -538,26 +613,102 @@ def _download_with_gdc_api(*, rows: List[_GdcFileRow], out_dir: Path, token_file
         target_dir = out_dir / row.file_id
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / row.filename
+        if not force_downloads and _download_is_complete_with_md5(
+            row.file_id,
+            row.filename,
+            row.size,
+            out_dir,
+            row.md5,
+        ):
+            continue
+        tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+        if force_downloads:
+            if target_path.exists():
+                target_path.unlink()
+            if tmp_path.exists():
+                tmp_path.unlink()
         if target_path.exists() and target_path.stat().st_size > 0:
+            existing_size = target_path.stat().st_size
+            if row.size and existing_size >= row.size and _md5_matches(target_path, row.md5):
+                continue
+            if row.size and existing_size >= row.size and row.md5 and not _md5_matches(target_path, row.md5):
+                target_path.unlink()
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                existing_size = 0
+            if not tmp_path.exists():
+                target_path.replace(tmp_path)
+            else:
+                tmp_size = tmp_path.stat().st_size
+                if existing_size > tmp_size:
+                    tmp_path.unlink()
+                    target_path.replace(tmp_path)
+                else:
+                    target_path.unlink()
+        if tmp_path.exists() and row.size and tmp_path.stat().st_size >= row.size:
+            tmp_path.replace(target_path)
             continue
 
         url = f"https://api.gdc.cancer.gov/data/{row.file_id}"
-        print(f"[gdc-api] Downloading {row.file_id} -> {target_path.name} ({row.size / (1024**2):.1f} MB)")
-        tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
-        md5 = hashlib.md5()
-        with requests.get(url, headers=headers, stream=True, timeout=(30, 600)) as resp:
-            resp.raise_for_status()
-            with tmp_path.open("wb") as handle:
-                for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                    if not chunk:
-                        continue
-                    handle.write(chunk)
-                    md5.update(chunk)
-        tmp_path.replace(target_path)
-        if row.md5:
-            digest = md5.hexdigest()
-            if digest != row.md5:
-                raise ValueError(f"MD5 mismatch for {row.file_id}: expected={row.md5} got={digest}")
+        attempts = max(1, int(retry_amount) if retry_amount else 1)
+        for attempt in range(1, attempts + 1):
+            resume_from = tmp_path.stat().st_size if tmp_path.exists() else 0
+            if row.size and resume_from >= row.size:
+                tmp_path.replace(target_path)
+                break
+            req_headers = dict(headers)
+            if resume_from > 0:
+                req_headers["Range"] = f"bytes={resume_from}-"
+            size_label = f"{row.size / (1024**2):.1f} MB" if row.size else "unknown size"
+            print(
+                f"[gdc-api] Downloading {row.file_id} -> {target_path.name} "
+                f"({size_label})"
+                + (f" [resume@{resume_from}]" if resume_from else "")
+            )
+            md5 = hashlib.md5()
+            if resume_from > 0:
+                with tmp_path.open("rb") as existing_handle:
+                    for chunk in iter(lambda: existing_handle.read(1024 * 1024), b""):
+                        md5.update(chunk)
+            try:
+                while True:
+                    with requests.get(url, headers=req_headers, stream=True, timeout=(30, 600)) as resp:
+                        if resume_from > 0 and resp.status_code == 200:
+                            # Server ignored Range; restart from scratch.
+                            resume_from = 0
+                            req_headers = dict(headers)
+                            md5 = hashlib.md5()
+                            if tmp_path.exists():
+                                tmp_path.unlink()
+                            continue
+                        if resp.status_code == 416 and resume_from > 0:
+                            break
+                        resp.raise_for_status()
+                        mode = "ab" if resume_from > 0 else "wb"
+                        with tmp_path.open(mode) as handle:
+                            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                                if not chunk:
+                                    continue
+                                handle.write(chunk)
+                                md5.update(chunk)
+                    break
+                if row.size and tmp_path.stat().st_size < row.size:
+                    raise IOError(
+                        f"Incomplete download for {row.file_id}: "
+                        f"{tmp_path.stat().st_size} < {row.size}"
+                    )
+                tmp_path.replace(target_path)
+                if row.md5:
+                    digest = md5.hexdigest()
+                    if digest != row.md5:
+                        raise ValueError(f"MD5 mismatch for {row.file_id}: expected={row.md5} got={digest}")
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt >= attempts:
+                    raise
+                wait = min(60, 5 * attempt)
+                print(f"[gdc-api] Retry {attempt}/{attempts} after error: {exc}. Sleeping {wait}s...")
+                time.sleep(wait)
 
 
 def _write_filtered_gdc_manifest(rows: List[_ManifestRow], out_path: Path) -> None:
@@ -652,6 +803,69 @@ def _resolve_downloaded_svs(download_root: Path, row: _ManifestRow) -> Path:
     raise FileNotFoundError(f"Downloaded SVS not found for {row.file_id} ({row.filename}) under {download_root}")
 
 
+def _validate_svs_with_openslide(path: Path) -> bool:
+    try:
+        import openslide  # type: ignore
+    except Exception:
+        return True
+    try:
+        slide = openslide.OpenSlide(str(path))
+        slide.close()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[svs] OpenSlide failed for {path}: {exc}")
+        return False
+
+
+def _ensure_valid_svs(
+    row: _ManifestRow,
+    *,
+    download_root: Path,
+    token_file: Optional[str],
+    retry_amount: int,
+    force_downloads: bool,
+) -> Path:
+    try:
+        path = _resolve_downloaded_svs(download_root, row)
+    except FileNotFoundError:
+        path = None
+    if path is not None:
+        if not _md5_matches(path, row.md5):
+            reason = "md5 mismatch"
+        elif _validate_svs_with_openslide(path):
+            return path
+        else:
+            reason = "OpenSlide failure"
+    else:
+        reason = "missing file"
+    print(f"[svs] Re-downloading {row.file_id} ({row.filename}) due to {reason}.")
+    if path is not None:
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        if path.exists():
+            path.unlink()
+        if tmp_path.exists():
+            tmp_path.unlink()
+    _download_with_gdc_api(
+        rows=[
+            _GdcFileRow(
+                file_id=row.file_id,
+                filename=row.filename,
+                md5=row.md5,
+                size=row.size,
+                state=row.state,
+            )
+        ],
+        out_dir=download_root,
+        token_file=token_file,
+        retry_amount=retry_amount,
+        force_downloads=force_downloads,
+    )
+    path = _resolve_downloaded_svs(download_root, row)
+    if not _md5_matches(path, row.md5) or not _validate_svs_with_openslide(path):
+        raise ValueError(f"SVS download invalid after re-download: {path}")
+    return path
+
+
 def _select_gene_subset(
     rows: List[_ManifestRow],
     *,
@@ -660,6 +874,8 @@ def _select_gene_subset(
     per_class: int,
     maf_download_dir: Path,
     token_file: Optional[str],
+    retry_amount: int = 3,
+    force_downloads: bool = False,
     experimental_strategy: str = "WXS",
 ) -> List[_ManifestRow]:
     """Select `per_class` positive/negative patients by downloading/parsing per-case MAFs."""
@@ -700,7 +916,22 @@ def _select_gene_subset(
             size=int(maf_hit.get("file_size") or 0),
             state=str(maf_hit.get("file_state") or "").strip(),
         )
-        _download_with_gdc_api(rows=[maf_row], out_dir=maf_download_dir, token_file=token_file)
+        if not force_downloads and _download_is_complete_with_md5(
+            file_id,
+            filename,
+            maf_row.size,
+            maf_download_dir,
+            maf_row.md5,
+        ):
+            pass
+        else:
+            _download_with_gdc_api(
+                rows=[maf_row],
+                out_dir=maf_download_dir,
+                token_file=token_file,
+                retry_amount=retry_amount,
+                force_downloads=force_downloads,
+            )
         maf_path = maf_download_dir / file_id / filename
         if not maf_path.exists() or maf_path.stat().st_size == 0:
             continue
@@ -876,20 +1107,20 @@ def _coerce_bool(value: object) -> bool:
     return text in {"1", "true", "yes", "y", "t"}
 
 
-def _discover_impact_feature(feature_dir: Path, dmp_assay_id: str) -> Tuple[Path, Optional[Path]]:
-    dmp_assay_id = str(dmp_assay_id).strip()
-    if not dmp_assay_id:
-        raise ValueError("Missing DMP_ASSAY_ID")
+def _discover_external_feature(feature_dir: Path, slide_id: str) -> Tuple[Path, Optional[Path]]:
+    slide_id = str(slide_id).strip()
+    if not slide_id:
+        raise ValueError("Missing slide_id for external features")
     candidates = [
-        feature_dir / f"features_img{dmp_assay_id}.pt",
-        feature_dir / f"features_{dmp_assay_id}.pt",
-        feature_dir / f"features_img{dmp_assay_id}.pth",
-        feature_dir / f"features_{dmp_assay_id}.pth",
+        feature_dir / f"features_img{slide_id}.pt",
+        feature_dir / f"features_{slide_id}.pt",
+        feature_dir / f"features_img{slide_id}.pth",
+        feature_dir / f"features_{slide_id}.pth",
     ]
     feature_path = next((p for p in candidates if p.exists()), None)
     if feature_path is None:
         raise FileNotFoundError(
-            f"IMPACT feature tensor not found for {dmp_assay_id} under {feature_dir}. Tried: "
+            f"External feature tensor not found for {slide_id} under {feature_dir}. Tried: "
             + ", ".join(str(p.name) for p in candidates)
         )
     meta_path = feature_path.with_suffix(".json")
@@ -920,44 +1151,57 @@ def _infer_slide_path_from_tile_manifest(meta_path: Optional[Path]) -> Optional[
     return value or None
 
 
-def _load_impact_manifest_balanced(
+def _load_external_manifest_balanced(
     path: Path,
     *,
     gene: str,
-    impact_root: Path,
+    external_root: Optional[Path],
     encoder: str,
     per_class: int,
-) -> Tuple[List[Dict[str, object]], Path]:
+) -> Tuple[List[Dict[str, object]], Optional[Path]]:
     import pandas as pd
 
     df = pd.read_csv(path)
     gene_col = str(gene).strip().upper()
-    if gene_col not in df.columns:
-        raise ValueError(f"IMPACT manifest missing gene column {gene_col!r}: {path}")
-    if "DMP_ASSAY_ID" not in df.columns:
-        raise ValueError(f"IMPACT manifest missing DMP_ASSAY_ID column: {path}")
+    label_series = None
+    if gene_col in df.columns:
+        label_series = df[gene_col].map(_map_binary_status)
+    elif "label_index" in df.columns:
+        label_series = pd.to_numeric(df["label_index"], errors="coerce")
+    elif "label" in df.columns:
+        label_series = df["label"].map(_map_binary_status)
+    elif "target" in df.columns:
+        label_series = df["target"].map(_map_binary_status)
+    if label_series is None:
+        raise ValueError(
+            f"External manifest missing label column. Provide {gene_col!r} or 'label_index'/'label'."
+        )
 
     if "scanned_slides_exist" in df.columns:
         df = df.loc[df["scanned_slides_exist"].map(_coerce_bool)].copy()
     if df.empty:
-        raise ValueError("No IMPACT rows selected (scanned_slides_exist filtered everything).")
+        raise ValueError("No external rows selected (scanned_slides_exist filtered everything).")
 
-    cohort = None
-    if "OncoTree_Code" in df.columns:
-        cohort = str(df["OncoTree_Code"].iloc[0]).strip().upper() or None
-    cohort = cohort or "LUAD"
-
-    cohort_dir = impact_root / cohort
-    feature_dir = cohort_dir / "features" / str(encoder)
-    if not feature_dir.exists():
-        raise FileNotFoundError(f"IMPACT feature dir not found: {feature_dir}")
+    feature_dir: Optional[Path] = None
+    if external_root:
+        candidates: List[Path] = []
+        if "OncoTree_Code" in df.columns:
+            cohort = str(df["OncoTree_Code"].iloc[0]).strip()
+            if cohort:
+                candidates.append(external_root / cohort / "features" / str(encoder))
+        candidates.append(external_root / "features" / str(encoder))
+        candidates.append(external_root / str(encoder))
+        for candidate in candidates:
+            if candidate.exists():
+                feature_dir = candidate
+                break
 
     labeled = df.copy()
-    labeled["label_index"] = labeled[gene_col].map(_map_binary_status)
+    labeled["label_index"] = label_series
     labeled = labeled.dropna(subset=["label_index"]).copy()
     labeled["label_index"] = labeled["label_index"].astype(int)
     if labeled.empty:
-        raise ValueError(f"No usable IMPACT labels found for {gene_col} (need Positive/Negative).")
+        raise ValueError(f"No usable external labels found for {gene_col} (need Positive/Negative).")
 
     per_class = int(per_class)
     full_cohort = per_class <= 0
@@ -969,19 +1213,43 @@ def _load_impact_manifest_balanced(
         take_pos = min(len(pos), int(per_class))
         take_neg = min(len(neg), int(per_class))
         if take_pos == 0 or take_neg == 0:
-            raise ValueError(f"IMPACT selection needs both classes; found pos={len(pos)} neg={len(neg)} for {gene_col}.")
+            raise ValueError(
+                f"External selection needs both classes; found pos={len(pos)} neg={len(neg)} for {gene_col}."
+            )
         picked = pd.concat([pos.head(take_pos), neg.head(take_neg)], ignore_index=True)
         picked = picked.sample(frac=1.0, random_state=1337).reset_index(drop=True)
 
+    slide_id_col = None
+    for candidate in ("slide_id", "DMP_ASSAY_ID", "sample_id", "case_id", "slide"):
+        if candidate in picked.columns:
+            slide_id_col = candidate
+            break
+    if slide_id_col is None:
+        raise ValueError("External manifest missing slide identifier column (need slide_id).")
+
     rows: List[Dict[str, object]] = []
     for _, row in picked.iterrows():
-        dmp = str(row["DMP_ASSAY_ID"]).strip()
+        slide_id = str(row[slide_id_col]).strip()
+        if not slide_id:
+            continue
         label = int(row["label_index"])
-        feature_path, meta_path = _discover_impact_feature(feature_dir, dmp)
-        slide_path = _infer_slide_path_from_tile_manifest(meta_path)
+        feature_path_value = str(row.get("feature_path") or "").strip()
+        feature_path: Optional[Path] = None
+        meta_path: Optional[Path] = None
+        if feature_path_value:
+            feature_path = Path(feature_path_value).expanduser()
+        elif feature_dir is not None:
+            feature_path, meta_path = _discover_external_feature(feature_dir, slide_id)
+        if feature_path is not None and meta_path is None:
+            meta_path = feature_path.with_suffix(".json")
+        slide_path = str(row.get("slide_path") or "").strip() or None
+        if not slide_path and meta_path:
+            slide_path = _infer_slide_path_from_tile_manifest(meta_path)
+        if feature_path is None or not feature_path.exists():
+            continue
         rows.append(
             {
-                "slide_id": dmp,
+                "slide_id": slide_id,
                 "slide_path": slide_path,
                 "label_index": label,
                 "split": "external",
@@ -989,7 +1257,7 @@ def _load_impact_manifest_balanced(
             }
         )
     if not rows:
-        raise ValueError("No usable IMPACT rows found (feature lookup failed for all selected slides).")
+        raise ValueError("No usable external rows found (feature lookup failed for all selected slides).")
     return rows, feature_dir
 
 
@@ -1018,8 +1286,8 @@ def main() -> int:
     parser.add_argument(
         "--per-class",
         type=int,
-        default=5,
-        help="Slides per class (default: 5 -> 10 total). Use 0 to label and use all available cases (very large).",
+        default=0,
+        help="Slides per class (default: 0 = full cohort). Use 0 to label and use all available cases (very large).",
     )
     parser.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     parser.add_argument("--patience", type=int, default=50, help="Early stopping patience (default: 50)")
@@ -1031,7 +1299,7 @@ def main() -> int:
         default="0.25",
         help="Comma-separated extra target-mpp values to tile within the same run (default: 0.25 for 40x).",
     )
-    parser.add_argument("--limit-tiles", type=int, default=2048)
+    parser.add_argument("--limit-tiles", type=int, default=0, help="Optional tile cap per slide (default: 0 = no cap).")
     parser.add_argument("--encoder", default="h-optimus-0")
     parser.add_argument("--device", default="auto", help="Feature/training device (default: auto)")
     parser.add_argument("--with-overlays", action="store_true", help="Generate overlays (requires OpenSlide + cv2)")
@@ -1041,25 +1309,30 @@ def main() -> int:
     parser.add_argument("--mutation-strategy", default="WXS", help="Experimental strategy filter for mutation calls")
     parser.add_argument("--retry-amount", type=int, default=20, help="gdc-client retry amount (default: 20)")
     parser.add_argument(
+        "--force-downloads",
+        action="store_true",
+        help="Re-download SVS/MAF files even if already present.",
+    )
+    parser.add_argument(
         "--secrets-env",
         default="configs/secrets.env",
         help="Optional .env file to load tokens from (default: configs/secrets.env)",
     )
     parser.add_argument(
-        "--impact-manifest",
-        default="/data1/vanderbc/foundation_model_training_images/IMPACT/manifests/Lung_Adenocarcinoma_annotated_deidentified.csv",
-        help="IMPACT LUAD manifest CSV",
+        "--external-manifest",
+        default="",
+        help="External cohort manifest CSV (required for external inference).",
     )
     parser.add_argument(
-        "--impact-root",
-        default="/data1/vanderbc/foundation_model_training_images/IMPACT",
-        help="IMPACT root directory containing cohort subdirs",
+        "--external-root",
+        default="",
+        help="External root containing features/<encoder> or <cohort>/features/<encoder> (optional if manifest has feature_path).",
     )
     parser.add_argument(
-        "--impact-per-class",
+        "--external-per-class",
         type=int,
-        default=5,
-        help="IMPACT cases per class for external inference (default: 5). Use 0 to run all labeled cases (very large).",
+        default=0,
+        help="External cases per class (default: 0 = full cohort). Use 0 to run all labeled cases.",
     )
     parser.add_argument("--allow-non-dx", action="store_true", help="Include non-diagnostic slides (disable -00-DX filter)")
     parser.add_argument("--force", action="store_true", help="Overwrite an existing run directory")
@@ -1071,7 +1344,7 @@ def main() -> int:
     parser.add_argument(
         "--rebuild",
         action="store_true",
-        help="Rebuild tiling/features/training/inference while preserving smoke_data downloads.",
+        help="Rebuild tiling/features/training/inference while preserving downloads.",
     )
     args = parser.parse_args()
 
@@ -1095,7 +1368,7 @@ def main() -> int:
         if args.force:
             shutil.rmtree(run_dir)
         elif args.rebuild:
-            # Preserve smoke_data (downloads + derived labels), but wipe stage outputs.
+            # Preserve downloads + derived labels, but wipe stage outputs.
             for stage in ("tiling", "features", "training", "inference", "external_inference", "plots"):
                 target = run_dir / stage
                 if target.exists():
@@ -1121,6 +1394,17 @@ def main() -> int:
 
     if (args.resume or args.rebuild) and slide_manifest.exists():
         print(f"[resume] Using existing slide manifest: {slide_manifest}")
+        if subset_manifest.exists():
+            svs_download_dir.mkdir(parents=True, exist_ok=True)
+            subset_rows = _load_gdc_manifest(subset_manifest)
+            for row in subset_rows:
+                _ensure_valid_svs(
+                    row,
+                    download_root=svs_download_dir,
+                    token_file=args.token,
+                    retry_amount=int(args.retry_amount),
+                    force_downloads=bool(args.force or args.force_downloads),
+                )
     else:
         gdc_client = _ensure_gdc_client(args.gdc_client)
         print(f"[gdc-client] Using: {gdc_client}")
@@ -1140,6 +1424,8 @@ def main() -> int:
             per_class=int(args.per_class),
             maf_download_dir=maf_download_dir,
             token_file=args.token,
+            retry_amount=int(args.retry_amount),
+            force_downloads=bool(args.force or args.force_downloads),
             experimental_strategy=str(args.mutation_strategy or ""),
         )
 
@@ -1150,28 +1436,56 @@ def main() -> int:
 
         _write_filtered_gdc_manifest(subset, subset_manifest)
         svs_download_dir.mkdir(parents=True, exist_ok=True)
-        if _gdc_client_usable(gdc_client):
+        force_downloads = bool(args.force or args.force_downloads)
+        download_rows = (
+            subset
+            if force_downloads
+            else [
+                r
+                for r in subset
+                if not _download_is_complete_with_md5(
+                    r.file_id,
+                    r.filename,
+                    r.size,
+                    svs_download_dir,
+                    r.md5,
+                )
+            ]
+        )
+        if not download_rows:
+            print("[gdc] All SVS files already present; skipping download.")
+        elif _gdc_client_usable(gdc_client):
+            manifest_to_download = target_manifest_dir / f"{args.project_id}_{gene_upper}_svs_manifest_download.tsv"
+            _write_filtered_gdc_manifest(download_rows, manifest_to_download)
             _download_with_gdc_client(
                 gdc_client=gdc_client,
-                manifest_path=subset_manifest,
+                manifest_path=manifest_to_download,
                 out_dir=svs_download_dir,
                 token=args.token,
                 retry_amount=int(args.retry_amount),
             )
         else:
-            print("[gdc-client] Falling back to GDC API download (no resume).")
+            print("[gdc-client] Falling back to GDC API download (resume/retry enabled).")
             _download_with_gdc_api(
                 rows=[
                     _GdcFileRow(file_id=r.file_id, filename=r.filename, md5=r.md5, size=r.size, state=r.state)
-                    for r in subset
+                    for r in download_rows
                 ],
                 out_dir=svs_download_dir,
                 token_file=args.token,
+                retry_amount=int(args.retry_amount),
+                force_downloads=force_downloads,
             )
 
         slide_rows: List[Dict[str, object]] = []
         for row in subset:
-            slide_path = _resolve_downloaded_svs(svs_download_dir, row)
+            slide_path = _ensure_valid_svs(
+                row,
+                download_root=svs_download_dir,
+                token_file=args.token,
+                retry_amount=int(args.retry_amount),
+                force_downloads=bool(args.force or args.force_downloads),
+            )
             slide_rows.append(
                 {
                     "slide_id": row.barcode,
@@ -1258,26 +1572,25 @@ def main() -> int:
 
     # Stage 1: tiling
     base_tiles_dir = _mpp_tiles_dir(run_dir, args.target_mpp)
-    _run_goldmark(
-        [
-            "tiling",
-            str(split_manifest),
-            "--output",
-            str(output_root),
-            "--run-name",
-            str(args.run_name),
-            "--tile-size",
-            str(int(args.tile_size)),
-            "--stride",
-            str(int(args.stride)),
-            "--target-mpp",
-            str(float(args.target_mpp)),
-            "--tiles-dir",
-            str(base_tiles_dir),
-            "--limit-tiles",
-            str(int(args.limit_tiles)),
-        ]
-    )
+    tiling_args = [
+        "tiling",
+        str(split_manifest),
+        "--output",
+        str(output_root),
+        "--run-name",
+        str(args.run_name),
+        "--tile-size",
+        str(int(args.tile_size)),
+        "--stride",
+        str(int(args.stride)),
+        "--target-mpp",
+        str(float(args.target_mpp)),
+        "--tiles-dir",
+        str(base_tiles_dir),
+    ]
+    if int(args.limit_tiles) > 0:
+        tiling_args.extend(["--limit-tiles", str(int(args.limit_tiles))])
+    _run_goldmark(tiling_args)
     tile_dir = base_tiles_dir
     _ensure_alias_dir(run_dir / "tiling" / "tiles", tile_dir, label="tiling")
     _write_case_tile_manifests(tile_dir, slide_manifest, resume=bool(args.resume))
@@ -1314,8 +1627,11 @@ def main() -> int:
                 str(float(extra_mpp)),
                 "--tiles-dir",
                 str(extra_tiles_dir),
-                "--limit-tiles",
-                str(int(args.limit_tiles)),
+                *(
+                    ["--limit-tiles", str(int(args.limit_tiles))]
+                    if int(args.limit_tiles) > 0
+                    else []
+                ),
             ]
         )
         _write_case_tile_manifests(extra_tiles_dir, slide_manifest, resume=bool(args.resume))
@@ -1354,15 +1670,12 @@ def main() -> int:
         ]
     )
     feature_dir = run_dir / "features" / str(args.encoder)
-    base_label = _mpp_label(args.target_mpp)
-    if base_label in ("20x", "40x"):
-        _ensure_alias_dir(run_dir / "features" / f"{args.encoder}_{base_label}", feature_dir, label="features")
 
     for extra_mpp in extra_target_mpp:
         if abs(float(extra_mpp) - float(args.target_mpp)) < 1e-6:
             continue
         extra_tiles_dir = _mpp_tiles_dir(run_dir, extra_mpp)
-        extra_encoder_name = f"{args.encoder}_{_mpp_label(extra_mpp)}"
+        extra_suffix = f"_{_mpp_label(extra_mpp)}"
         _run_goldmark(
             [
                 "features",
@@ -1375,8 +1688,8 @@ def main() -> int:
                 str(args.run_name),
                 "--encoder",
                 str(args.encoder),
-                "--encoder-output-name",
-                extra_encoder_name,
+                "--feature-name-suffix",
+                extra_suffix,
                 "--device",
                 str(args.device),
                 "--batch-size",
@@ -1425,9 +1738,10 @@ def main() -> int:
             *split_columns,
         ]
     )
+    target_checkpoints_root = _ensure_target_checkpoint_root(checkpoints_root, target_dir)
     _ensure_alias_dir(run_dir / "checkpoints", run_dir / "training" / "checkpoints", label="checkpoints")
 
-    cv_summary = run_dir / "training" / "checkpoints" / "classification_report" / "cv_summary.csv"
+    cv_summary = target_checkpoints_root / "classification_report" / "cv_summary.csv"
     if not cv_summary.exists():
         raise FileNotFoundError(f"Expected CV summary not found: {cv_summary}")
 
@@ -1436,11 +1750,11 @@ def main() -> int:
 
     manifest_df = pd.read_csv(split_manifest)
     for split_col in split_columns:
-        ckpt = run_dir / "training" / "checkpoints" / split_col / "checkpoint" / "checkpoint_best.pt"
+        ckpt = target_checkpoints_root / split_col / "checkpoint" / "checkpoint_best.pt"
         if not ckpt.exists():
             raise FileNotFoundError(f"Missing checkpoint for {split_col}: {ckpt}")
         # Write inference artifacts under the split checkpoint directory so each split is self-contained.
-        out_dir = run_dir / "training" / "checkpoints" / split_col / "inference" / "test"
+        out_dir = target_checkpoints_root / split_col / "inference" / "test"
         runner = InferenceRunner(
             manifest=manifest_df,
             feature_dir=feature_dir,
@@ -1462,97 +1776,103 @@ def main() -> int:
                 title=f"{args.project_id} · {gene_upper} · {args.encoder} · {split_col} test",
             )
 
-    # Stage 5: external inference on IMPACT using best split checkpoint.
+    # Stage 5: external inference using best split checkpoint.
     best_split = _pick_best_split(cv_summary)
-    best_ckpt = run_dir / "training" / "checkpoints" / best_split / "checkpoint" / "checkpoint_best.pt"
+    best_ckpt = target_checkpoints_root / best_split / "checkpoint" / "checkpoint_best.pt"
     if not best_ckpt.exists():
         raise FileNotFoundError(f"Best checkpoint not found: {best_ckpt}")
-    impact_manifest_path = Path(args.impact_manifest).expanduser().resolve()
-    impact_root = Path(args.impact_root).expanduser().resolve()
-    impact_rows, impact_feature_dir = _load_impact_manifest_balanced(
-        impact_manifest_path,
-        gene=gene_upper,
-        impact_root=impact_root,
-        encoder=str(args.encoder),
-        per_class=int(args.impact_per_class),
-    )
-    impact_out_manifest = target_manifest_dir / f"impact_external_{gene_upper}_{args.encoder}.csv"
-    pd.DataFrame(impact_rows).to_csv(impact_out_manifest, index=False)
-    print(f"[impact] External manifest: {impact_out_manifest} (rows={len(impact_rows)})")
 
-    external_dir = run_dir / "training" / "checkpoints" / best_split / "external_inference" / "IMPACT"
-    external_dir.mkdir(parents=True, exist_ok=True)
-    runner = InferenceRunner(
-        manifest=pd.read_csv(impact_out_manifest),
-        feature_dir=impact_feature_dir,
-        checkpoint_path=best_ckpt,
-        output_dir=external_dir,
-        target_column="label_index",
-        config=InferenceConfig(
-            # External inference runs over the entire cohort (no manifest split filtering required).
-            # If you want filtering, set split_column to a real column name and split_value accordingly.
-            split_column="",
-            split_value="external",
-            generate_overlays=bool(args.with_overlays),
-            export_attention=True,
-        ),
-    )
-    impact_results = runner.run()
-    if not args.no_plots:
-        _maybe_write_roc_pr_plots(
-            impact_results,
-            external_dir / "plots",
-            title=f"IMPACT LUAD · {gene_upper} · {args.encoder} · best={best_split}",
+    external_manifest_raw = str(args.external_manifest or "").strip()
+    external_results = None
+    external_dir = target_checkpoints_root / best_split / "external_inference" / "external"
+    if external_manifest_raw:
+        external_manifest_path = Path(external_manifest_raw).expanduser().resolve()
+        external_root = Path(str(args.external_root)).expanduser().resolve() if args.external_root else None
+        external_rows, external_feature_dir = _load_external_manifest_balanced(
+            external_manifest_path,
+            gene=gene_upper,
+            external_root=external_root,
+            encoder=str(args.encoder),
+            per_class=int(args.external_per_class),
         )
+        external_out_manifest = target_manifest_dir / f"external_manifest_{gene_upper}_{args.encoder}.csv"
+        pd.DataFrame(external_rows).to_csv(external_out_manifest, index=False)
+        print(f"[external] External manifest: {external_out_manifest} (rows={len(external_rows)})")
 
-    # Convenience: ensure each split directory has an `external_inference/IMPACT` entry so that split
+        external_dir.mkdir(parents=True, exist_ok=True)
+        runner = InferenceRunner(
+            manifest=pd.read_csv(external_out_manifest),
+            feature_dir=external_feature_dir,
+            checkpoint_path=best_ckpt,
+            output_dir=external_dir,
+            target_column="label_index",
+            config=InferenceConfig(
+                split_column="",
+                split_value="external",
+                generate_overlays=bool(args.with_overlays),
+                export_attention=True,
+            ),
+        )
+        external_results = runner.run()
+        if not args.no_plots:
+            _maybe_write_roc_pr_plots(
+                external_results,
+                external_dir / "plots",
+                title=f"External cohort · {gene_upper} · {args.encoder} · best={best_split}",
+            )
+    else:
+        print("[external] Skipping external inference (no --external-manifest provided).")
+
+    # Convenience: ensure each split directory has an `external_inference/external` entry so that split
     # context is discoverable in one place. Prefer symlinks; fall back to a pointer file when symlinks
     # are not supported.
-    for split_col in split_columns:
-        split_external_root = run_dir / "training" / "checkpoints" / split_col / "external_inference"
-        link_path = split_external_root / "IMPACT"
-        if split_col == best_split:
-            continue
-        try:
-            split_external_root.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            continue
-        if link_path.exists() or link_path.is_symlink():
+    if external_results is not None:
+        for split_col in split_columns:
+            split_external_root = target_checkpoints_root / split_col / "external_inference"
+            link_path = split_external_root / "external"
+            if split_col == best_split:
+                continue
             try:
-                if link_path.is_dir() and not link_path.is_symlink():
-                    shutil.rmtree(link_path)
-                else:
-                    link_path.unlink()
+                split_external_root.mkdir(parents=True, exist_ok=True)
             except OSError:
-                pass
-        try:
-            rel_target = os.path.relpath(external_dir, start=link_path.parent)
-            os.symlink(rel_target, link_path)
-        except OSError:
+                continue
+            if link_path.exists() or link_path.is_symlink():
+                try:
+                    if link_path.is_dir() and not link_path.is_symlink():
+                        shutil.rmtree(link_path)
+                    else:
+                        link_path.unlink()
+                except OSError:
+                    pass
             try:
-                link_path.mkdir(parents=True, exist_ok=True)
-                (link_path / "LOCATION.txt").write_text(
-                    "\n".join(
-                        [
-                            "External inference was run once using the best-performing split checkpoint.",
-                            f"best_split: {best_split}",
-                            f"checkpoint: {best_ckpt}",
-                            f"results_dir: {external_dir}",
-                            f"results_csv: {impact_results}",
-                            "",
-                        ]
+                rel_target = os.path.relpath(external_dir, start=link_path.parent)
+                os.symlink(rel_target, link_path)
+            except OSError:
+                try:
+                    link_path.mkdir(parents=True, exist_ok=True)
+                    (link_path / "LOCATION.txt").write_text(
+                        "\n".join(
+                            [
+                                "External inference was run once using the best-performing split checkpoint.",
+                                f"best_split: {best_split}",
+                                f"checkpoint: {best_ckpt}",
+                                f"results_dir: {external_dir}",
+                                f"results_csv: {external_results}",
+                                "",
+                            ]
+                        )
                     )
-                )
-            except OSError:
-                pass
+                except OSError:
+                    pass
 
-    print("\nTCGA LUAD KRAS CV → IMPACT smoke test complete.")
+    print("\nTCGA CV → external cohort full run complete.")
     print(f"- Run dir: {run_dir}")
     print(f"- Split manifest: {split_manifest}")
     print(f"- CV summary: {cv_summary}")
     print(f"- Best split: {best_split}")
     print(f"- Best checkpoint: {best_ckpt}")
-    print(f"- External IMPACT inference results: {impact_results}")
+    if external_results is not None:
+        print(f"- External inference results: {external_results}")
     return 0
 
 

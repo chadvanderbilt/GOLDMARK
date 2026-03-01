@@ -47,7 +47,9 @@ DEVICE="${DEVICE:-cuda}"
 TARGET_MPP="${TARGET_MPP:-0.5}"
 EXTRA_TARGET_MPP="${EXTRA_TARGET_MPP:-}"
 PER_CLASS="${PER_CLASS:-0}"
-IMPACT_PER_CLASS="${IMPACT_PER_CLASS:-0}"
+EXTERNAL_PER_CLASS="${EXTERNAL_PER_CLASS:-0}"
+EXTERNAL_MANIFEST="${EXTERNAL_MANIFEST:-}"
+EXTERNAL_ROOT="${EXTERNAL_ROOT:-}"
 LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-10}"
 PATIENCE="${PATIENCE:-50}"
@@ -55,6 +57,17 @@ PATIENCE="${PATIENCE:-50}"
 TILING_ARGS=("--target-mpp" "${TARGET_MPP}")
 if [[ -n "${EXTRA_TARGET_MPP}" ]]; then
   TILING_ARGS+=("--extra-target-mpp" "${EXTRA_TARGET_MPP}")
+fi
+LIMIT_ARGS=()
+if [[ "${LIMIT_TILES}" -gt 0 ]]; then
+  LIMIT_ARGS+=(--limit-tiles "${LIMIT_TILES}")
+fi
+EXTERNAL_ARGS=()
+if [[ -n "${EXTERNAL_MANIFEST}" ]]; then
+  EXTERNAL_ARGS+=(--external-manifest "${EXTERNAL_MANIFEST}")
+fi
+if [[ -n "${EXTERNAL_ROOT}" ]]; then
+  EXTERNAL_ARGS+=(--external-root "${EXTERNAL_ROOT}")
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-/data1/vanderbc/vanderbc/anaconda3/envs/running_ft/bin/python}"
@@ -69,28 +82,37 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   fi
 fi
 
-STAMP="$(date +%Y%m%dT%H%M%S)"
-LOG_FILE="${RUNS_ROOT}/${RUN_NAME}_nohup_${STAMP}.out"
-PID_FILE="${RUNS_ROOT}/${RUN_NAME}_nohup.pid"
+RUN_DIR="${RUNS_ROOT}/${RUN_NAME}"
+LOG_DIR="${RUN_DIR}/logs"
+LOG_FILE="${LOG_DIR}/nohup.out"
+PID_FILE="${LOG_DIR}/nohup.pid"
 
-mkdir -p "${RUNS_ROOT}"
+mkdir -p "${LOG_DIR}"
 
-PYTHONUNBUFFERED=1 nohup "${PYTHON_BIN}" scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+if [[ -f "${LOG_FILE}" ]]; then
+  STAMP="$(date +%Y%m%dT%H%M%S)"
+  mv "${LOG_FILE}" "${LOG_DIR}/nohup.prev_${STAMP}.out"
+fi
+
+PYTHONUNBUFFERED=1 nohup "${PYTHON_BIN}" scripts/tcga_cv_to_external_full_run.py \
   --output "${RUNS_ROOT}" \
   --run-name "${RUN_NAME}" \
   --project-id "${PROJECT_ID}" \
   --gene "${GENE}" \
   --per-class "${PER_CLASS}" \
-  --impact-per-class "${IMPACT_PER_CLASS}" \
+  --external-per-class "${EXTERNAL_PER_CLASS}" \
   --encoder "${ENCODER}" \
   --device "${DEVICE}" \
   "${TILING_ARGS[@]}" \
-  --limit-tiles "${LIMIT_TILES}" \
+  "${LIMIT_ARGS[@]}" \
   --epochs "${EPOCHS}" \
   --patience "${PATIENCE}" \
+  "${EXTERNAL_ARGS[@]}" \
   "${EXTRA_ARGS[@]}" \
   > "${LOG_FILE}" 2>&1 &
 
 echo $! > "${PID_FILE}"
 echo "[info] Started PID=$(cat "${PID_FILE}")"
+echo "[info] Run dir: ${RUN_DIR}"
 echo "[info] Log: ${LOG_FILE}"
+echo "[info] Tail: tail -f \"${LOG_FILE}\""

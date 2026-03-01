@@ -9,25 +9,25 @@ This repository is in support of the manuscript **GOLDMARK: Governed Outcome-Lin
 5) **Inference + external inference** and **attention export** (best checkpoint + fixed late epoch)
 
 The design goal is reproducibility and clarity: **cross-validation alone is not sufficient**—the pipeline
-is built around **reciprocal external testing** (e.g., TCGA→IMPACT and IMPACT→TCGA) under identical
+is built around **reciprocal external testing** (e.g., TCGA→external and external→TCGA) under identical
 preprocessing and evaluation criteria.
 
 ## Start here (real GDC download + end-to-end pipeline)
 
-Downloads a tiny subset of **real TCGA SVS slides** via **GDC** and runs:
+Downloads and labels **real TCGA SVS slides** via **GDC** and runs:
 
 `download → tiling → features → training → inference`
 
-This is a real-data run (WSI deps + OpenSlide required). Even with a small subset, expect **multiple GB**
+This is a real-data run (WSI deps + OpenSlide required). Expect **multiple TB**
 of downloads and non-trivial runtime.
 
 **Preflight checklist (avoid the common failure modes)**
 - Most encoders are hosted on Hugging Face; **approval + a valid HF token are required to run this pipeline**. Without access you will hit `401 Unauthorized` during feature extraction.
 - Ensure `configs/secrets.env` exists and is **sourced for non-interactive runs** (SLURM/nohup). Example: `set -a; source configs/secrets.env; set +a`
 - If you use `h-optimus-0`, your `HUGGINGFACE_HUB_TOKEN` (or `HF_TOKEN`) must have **explicit access** to `bioptimus/H-optimus-0`. A `401 Unauthorized` means the token is missing or lacks access.
-- `gdc-client` requires newer glibc on some clusters. If it fails, GOLDMARK falls back to the GDC API (no resume; slower). For full cohorts, prefer a compatible `gdc-client` or a newer node.
+- `gdc-client` requires newer glibc on some clusters. If it fails, GOLDMARK falls back to the GDC API (slower). For full cohorts, prefer a compatible `gdc-client` or a newer node.
 - Some clusters do **not** provide `python`. Use `python3` or set `PYTHON_BIN` in the SLURM script.
-- The LUAD KRAS smoke test defaults to **10 slides** (`--per-class 5`). Use `--per-class 0` for the full cohort (very large).
+- The LUAD KRAS end-to-end run defaults to the **full cohort** (`--per-class 0`). Set `--per-class` to a small value for a quick sanity check.
 
 ```bash
 git clone https://github.com/chadvanderbilt/GOLDMARK.git
@@ -39,8 +39,10 @@ cp configs/secrets.env.example configs/secrets.env
 # edit configs/secrets.env (GDC token file path, ONCOKB_TOKEN, HF_TOKEN, ...)
 
 # Option A (recommended on HPC): conda
+source /home/vanderbc/.bashrc
 conda env create -f environment.yml
 conda activate goldmark
+python -m pip install -r requirements.txt -r requirements-wsi.txt -r requirements-encoders.txt
 
 # Option B: venv (requires Python 3.10+ and native OpenSlide installed on your system)
 # python3 -m venv .venv
@@ -50,8 +52,8 @@ python -m pip install -r requirements.txt -r requirements-wsi.txt
 
 # Installs gdc-client into bin/ (ignored by git)
 python scripts/install_gdc_client.py --dest bin/gdc-client
-# Note: some HPC nodes ship older glibc; if gdc-client fails to run, the smoke
-# test will fall back to downloading via the GDC API (sufficient for small runs).
+# Note: some HPC nodes ship older glibc; if gdc-client fails to run, the pipeline
+# will fall back to downloading via the GDC API (sufficient for small runs).
 
 # Downloads 2 tumor + 2 normal slides (smallest by file size) and runs the full pipeline on CPU.
 python scripts/gdc_smoke_test_tcga.py --project-id TCGA-COAD --per-class 2 --device cpu --force
@@ -59,30 +61,30 @@ python scripts/gdc_smoke_test_tcga.py --project-id TCGA-COAD --per-class 2 --dev
 
 Outputs land in `runs/gdc_smoke_test/` (including `runs/gdc_smoke_test/inference/inference/inference_results.csv`).
 
-## Reciprocal TCGA→IMPACT smoke tests (mutation labels + external inference)
+## Reciprocal TCGA→external end-to-end runs (mutation labels + external inference)
 
-This repo ships two end-to-end smoke tests that exercise the **full mutation-label → MIL training → attention export**
-pathway and validate **reciprocal external inference** (TCGA→IMPACT):
+This repo ships two end-to-end scripts that exercise the **full mutation-label → MIL training → attention export**
+pathway and validate **reciprocal external inference** (TCGA→external):
 
-1) `scripts/tcga_to_impact_smoke_test.py` (fast, minimal; good for “does anything run?”)
-2) `scripts/tcga_luad_kras_cv_to_impact_smoke_test.py` (**recommended**; 10 TCGA slides, 5-fold CV, attention exports, IMPACT external inference)
+1) `scripts/tcga_to_external_smoke_test.py` (fast, minimal; good for “does anything run?”)
+2) `scripts/tcga_cv_to_external_full_run.py` (**full run by default**; 5-fold CV, attention exports, external inference)
 
-### Recommended: TCGA-LUAD KRAS (5×70/30 splits) → IMPACT LUAD external inference
+### Recommended: TCGA-LUAD KRAS (5×70/30 splits) → external LUAD inference
 
 What it does:
-- Downloads **10 TCGA-LUAD diagnostic** slides via GDC (filters to `-00-DX` unless `--allow-non-dx`)
+- Downloads **TCGA-LUAD diagnostic** slides via GDC (filters to `-00-DX` unless `--allow-non-dx`)
 - **Only downloads slides with targets**: the script labels cases using MAFs, then builds a subset manifest and downloads only those labeled slides.
 - Labels each patient as KRAS **positive/negative** from the GDC **Masked Somatic Mutation** MAF
 - Builds **5 independent** 70/30 splits with per-split `val` assignments (train/val/test stored as columns)
-- Trains for a small number of epochs (default: 10) and writes a `cv_summary.csv`
+- Trains for a full cohort by default and writes a `cv_summary.csv`
 - Runs **held-out test inference per split** and exports **attention vectors**
-- Runs **external inference on IMPACT LUAD** using the best split checkpoint (and links it from all split dirs)
+- Runs **external inference on the external LUAD cohort** using the best split checkpoint (and links it from all split dirs)
 
 ```bash
-python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
-  --run-name gdc_smoke_test_luad_kras_cv_to_impact \
-  --device cpu \
-  --limit-tiles 64 \
+python scripts/tcga_cv_to_external_full_run.py \
+  --run-name TCGA-LUAD \
+  --per-class 0 \
+  --device cuda \
   --epochs 10 \
   --patience 50 \
   --force
@@ -93,7 +95,8 @@ python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
 For GitHub users, we provide **generic** launchers that accept options via environment variables.
 These are not hard-coded to a specific project or gene.
 
-**SLURM (GPU example)** — `examples/slurm/submit_tcga_cv_to_impact.sh`
+<details>
+<summary><strong>SLURM (GPU example)</strong> — <code>examples/slurm/submit_tcga_cv_to_external.sh</code></summary>
 
 ```bash
 # Example: TCGA-LUAD / EGFR / h-optimus-0, resume in-place
@@ -101,25 +104,65 @@ PROJECT_ID=TCGA-LUAD \
 GENE=EGFR \
 ENCODER=h-optimus-0 \
 RUN_MODE=resume \
-sbatch examples/slurm/submit_tcga_cv_to_impact.sh
+sbatch examples/slurm/submit_tcga_cv_to_external.sh
+```
+
+<strong>SLURM submission example (LUAD EGFR + external inference)</strong> — <code>examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh</code>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export EXTERNAL_PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=0.25
+export EXTERNAL_MANIFEST=/path/to/external_manifest.csv
+export EXTERNAL_ROOT=/path/to/foundation_model_training_images/EXTERNAL
+
+sbatch examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh
 ```
 
 Notes for SLURM users:
 - You must set a **GPU-capable partition** in the script (`#SBATCH -p ...`) and match your cluster’s GPU request syntax (e.g., `--gres=gpu:1`).
-- Some clusters require different SBATCH fields (account/QoS/time/memory). Adjust the header in `examples/slurm/submit_tcga_cv_to_impact.sh` to match local policy.
+- Some clusters require different SBATCH fields (account/QoS/time/memory). Adjust the header in `examples/slurm/submit_tcga_cv_to_external.sh` to match local policy.
+</details>
 
-**nohup (interactive node)** — `scripts/nohup_tcga_cv_to_impact.sh`
+<details>
+<summary><strong>nohup (interactive node)</strong> — <code>scripts/nohup_tcga_cv_to_external.sh</code></summary>
 
 ```bash
 PROJECT_ID=TCGA-LUAD \
 GENE=EGFR \
 ENCODER=h-optimus-0 \
 RUN_MODE=resume \
-bash scripts/nohup_tcga_cv_to_impact.sh
+bash scripts/nohup_tcga_cv_to_external.sh
 
 # watch
-tail -f runs/<run-name>_nohup_*.out
+tail -f runs/<run-name>/logs/nohup.out
 ```
+</details>
+
+Full example (LUAD EGFR, resume, 20x+40x) with explicit external manifest/root:
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export EXTERNAL_PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=0.25
+export EXTERNAL_MANIFEST=/path/to/external_manifest.csv
+export EXTERNAL_ROOT=/path/to/foundation_model_training_images/EXTERNAL
+bash /data1/vanderbc/vanderbc/GOLDMARK/scripts/nohup_tcga_cv_to_external.sh
+```
+
+Note: external inference only runs if `EXTERNAL_MANIFEST` (and optionally `EXTERNAL_ROOT`) are set.
 
 **End-to-end example (foreground)** — `examples/run_tcga_luad_egfr_end_to_end.sh`
 
@@ -139,7 +182,7 @@ bash examples/run_tcga_luad_egfr_end_to_end.sh
 - `EXTRA_TARGET_MPP` (default: `0.25`; comma-separated for additional MPPs)
 - `RUN_NAME` (default: `${PROJECT_ID}`)
 - `RUN_MODE` in `{force|resume|rebuild}` (default: `force`)
-- `PER_CLASS`, `IMPACT_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`
+- `PER_CLASS`, `EXTERNAL_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`
 
 By default, `RUN_NAME` is set to the project id so all outputs live under `runs/<project-id>/`.
 
@@ -153,7 +196,7 @@ All outputs land under `runs/<project-id>/` (the default `RUN_NAME` is the proje
 - `runs/<project-id>/gdc_downloads/maf/**/**.maf.gz` — downloaded GDC mutation calls used for labels
 - `runs/<project-id>/checkpoints/<TARGET>/manifests/<PROJECT>_<TARGET>_svs_manifest_subset.tsv` — selected SVS rows
 - `runs/<project-id>/checkpoints/<TARGET>/manifests/<PROJECT>_<TARGET>_slides.csv` — selected slide list + labels (schema below)
-- `runs/<project-id>/checkpoints/<TARGET>/manifests/impact_external_<TARGET>_<encoder>.csv` — external IMPACT subset manifest (schema below)
+- `runs/<project-id>/checkpoints/<TARGET>/manifests/external_manifest_<TARGET>_<encoder>.csv` — external subset manifest (schema below)
 
 **B) Tiling**
 - `runs/<project-id>/tiling/tiles_20x/manifests/<slide_id>_tiles.csv` — per-slide tile coordinate manifest (schema below)
@@ -170,44 +213,45 @@ When `EXTRA_TARGET_MPP` is set, the additional tiling pass writes to:
 - `runs/<project-id>/tiling/tiles_mpp_<value>/...` for any other MPP
 
 **C) Features + QC**
-- `runs/<project-id>/features/<encoder>/features_<slide_id>.pt` — per-slide feature tensor (N tiles × D)
+- `runs/<project-id>/features/<encoder>/features_<slide_id>.pt` — per-slide **20x** feature tensor (N tiles × D)
 - `runs/<project-id>/features/<encoder>/features_<slide_id>.json` — QC metadata + checksums (schema below)
 - If feature extraction fails QC, tensors are renamed:
   - `features_<slide_id>.FAILED_tile_count_mismatch.pt`
   - `features_<slide_id>.FAILED_degenerate_embeddings.pt`
 
-When `EXTRA_TARGET_MPP` is set, the additional feature pass writes to:
-- `runs/<project-id>/features/<encoder>_40x/features_<slide_id>.pt` (for `EXTRA_TARGET_MPP=0.25`)
-- `runs/<project-id>/features/<encoder>_40x/features_<slide_id>.json`
-- `runs/<project-id>/features/<encoder>_mpp_<value>/...` for any other MPP
+When `EXTRA_TARGET_MPP` is set, the additional feature pass writes **into the same encoder directory**
+using a filename suffix:
+- `runs/<project-id>/features/<encoder>/features_<slide_id>_40x.pt` (for `EXTRA_TARGET_MPP=0.25`)
+- `runs/<project-id>/features/<encoder>/features_<slide_id>_40x.json`
+- `features_<slide_id>_mpp_<value>.*` for any other MPP
 
 **D) Training (5-fold CV)**
 - `runs/<project-id>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — the split manifest used for tiling/features/training (schema below)
-- `runs/<project-id>/training/checkpoints/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
-- `runs/<project-id>/training/checkpoints/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
+- `runs/<project-id>/training/checkpoints/<GENE>/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
 
 **E) Per-split held-out test inference (attention export + ROC/PR plots)**
 
 Written under each split so split context is self-contained:
-- `runs/<run-name>/training/checkpoints/split_1_set/inference/test/inference_results.csv`
-- `runs/<run-name>/training/checkpoints/split_1_set/inference/test/attention/<slide_id>_attention.csv`
-- `runs/<run-name>/training/checkpoints/split_1_set/inference/test/plots/roc_pr_curves.png`
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/inference/test/inference_results.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/inference/test/attention/<slide_id>_attention.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/inference/test/plots/roc_pr_curves.png`
 
 Note: the training stage also writes probability exports under the same directory (e.g. `probabilities_test_set.csv`).
 
-**F) External inference (IMPACT LUAD)**
+**F) External inference (external LUAD)**
 
 External inference is executed **once** using the **best split** checkpoint and written under that split:
-- `runs/<run-name>/training/checkpoints/<best_split>/external_inference/IMPACT/inference_results.csv`
-- `runs/<run-name>/training/checkpoints/<best_split>/external_inference/IMPACT/attention/<slide_id>_attention.csv`
-- `runs/<run-name>/training/checkpoints/<best_split>/external_inference/IMPACT/plots/roc_pr_curves.png`
+- `runs/<project-id>/training/checkpoints/<GENE>/<best_split>/external_inference/external/inference_results.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/<best_split>/external_inference/external/attention/<slide_id>_attention.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/<best_split>/external_inference/external/plots/roc_pr_curves.png`
 
-For convenience, each non-best split directory contains an `external_inference/IMPACT` entry that links to (or points at)
+For convenience, each non-best split directory contains an `external_inference/external` entry that links to (or points at)
 the best-split external inference results.
 
 #### File schemas (column names)
 
-**TCGA slide selection manifest** (`smoke_data/tcga_tcga-luad_kras_slides.csv`)
+**TCGA slide selection manifest** (`training/checkpoints/<GENE>/manifests/<PROJECT>_<GENE>_slides.csv`)
 - `slide_id` (e.g. `TCGA-05-4244-01Z-00-DX1`)
 - `slide_path` (downloaded `.svs` path)
 - `label_index` (`0`/`1` mutation label for the chosen gene)
@@ -218,7 +262,7 @@ the best-split external inference results.
 - `target` (legacy column retained for compatibility)
 - `split_1_set` … `split_5_set` with values in `{train,val,test}`
 
-**Tile manifest** (`tiling/tiles/manifests/<slide_id>_tiles.csv`)
+**Tile manifest** (`tiling/tiles_20x/manifests/<slide_id>_tiles.csv`)
 - `slide_id`
 - `tile_id` (stable tile identifier)
 - `x`, `y` (level-0 pixel coordinates)
@@ -234,8 +278,9 @@ the best-split external inference results.
 - `embedding_stats` (degenerate/variance checks)
 - `feature_sha256`, `feature_bytes`
 - `status` in `{ok,failed}` and `failure_reason` when failed
+For extra MPPs, the same schema is written with a suffix (e.g., `features_<slide_id>_40x.json`).
 
-**CV summary** (`training/checkpoints/classification_report/cv_summary.csv`)
+**CV summary** (`training/checkpoints/<GENE>/classification_report/cv_summary.csv`)
 - `split` (e.g. `split_1_set`)
 - `best_epoch`
 - `val_*` and `test_*` metrics, including `*_roc_auc`, `*_accuracy`, `*_precision`, `*_recall`, `*_f1`, `*_balanced_error_rate`
@@ -253,7 +298,7 @@ the best-split external inference results.
 - `attention` (raw attention weight)
 - `probability` (slide-level probability repeated for convenience)
 
-**External inference manifest** (`smoke_data/impact_external_<GENE>_<encoder>.csv`)
+**External inference manifest** (`training/checkpoints/<GENE>/manifests/external_manifest_<GENE>_<encoder>.csv`)
 
 Minimum required columns for external inference with `InferenceRunner`:
 - `slide_id` (string id used to resolve features / label rows)
@@ -269,8 +314,8 @@ Optional columns:
 Docs:
 - `docs/targets.md`
 - `docs/pipeline.md`
-- SLURM (generic): `examples/slurm/submit_tcga_cv_to_impact.sh`
-- SLURM (EGFR example): `examples/slurm/submit_tcga_luad_EGFR_cv_to_impact.sh`
+- SLURM (generic): `examples/slurm/submit_tcga_cv_to_external.sh`
+- SLURM (EGFR example): `examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh`
 
 ## Repository layout
 
@@ -367,7 +412,7 @@ PYTHONPATH=. python scripts/generate_versioned_split_manifest.py \
 
 See manifest header examples:
 - TCGA split manifest schema: `examples/manifests/tcga_split_manifest_header.csv`
-- IMPACT manifest schema (header only): `examples/manifests/impact_LUAD_manifest_header.csv`
+- External manifest schema (header only): `examples/manifests/external_LUAD_manifest_header.csv`
 
 ### 2) Tiling (20x/40x coordinates)
 
@@ -428,7 +473,7 @@ to show how checkpoint selection affects results and to support consistent downs
 See:
 - `scripts/run_inference_from_plan.py`
 - `scripts/gma_inference_pipeline.py`
-- SLURM template: `examples/slurm/submit_attn_impact_BLCA_ERBB2.sh`
+- SLURM template: `examples/slurm/submit_attn_external_BLCA_ERBB2.sh`
 
 ## Reference figures/tables
 
@@ -497,40 +542,35 @@ python scripts/launch_manuscript_tasks.py --execute
 Note: this wrapper runs commands **sequentially**. On HPC clusters you will typically wrap each printed command
 in `sbatch` (or your scheduler of choice).
 
-## Run a full project (no subsampling)
+## Run a full project (default)
 
-The `scripts/tcga_luad_kras_cv_to_impact_smoke_test.py` runner defaults to a **balanced subsample** (via `--per-class`)
-so it can finish quickly. To validate the pipeline end-to-end on a **full TCGA project**, set:
-
-- `--per-class 0` to label and include **all** available cases in the TCGA project (one slide per patient).
-- `--impact-per-class 0` to run external inference on **all** labeled IMPACT slides (optional; can be large).
+The `scripts/tcga_cv_to_external_full_run.py` runner defaults to the **full cohort** (`--per-class 0`).
+For a quick sanity check, set `--per-class` to a small value and optionally set `--limit-tiles`.
 
 Important:
 - This can download **hundreds of SVS files** (many 10s–100s of GB). Use a scratch filesystem.
 - By default the TCGA slide filter keeps diagnostic FFPE slides (`-00-DX`). Use `--allow-non-dx` to disable this.
 - Foundation-model encoders may require authentication/approval (e.g. gated HF repos). Put tokens in `configs/secrets.env`.
 
-Example (single full task: TCGA-LUAD EGFR → external IMPACT LUAD):
+Example (single full task: TCGA-LUAD EGFR → external LUAD):
 
 ```bash
 export RUNS_ROOT="runs"
 export RUN_NAME="tcga_luad_egfr_full"
 
-python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+python scripts/tcga_cv_to_external_full_run.py \
   --output "${RUNS_ROOT}" \
   --run-name "${RUN_NAME}" \
   --project-id "TCGA-LUAD" \
   --gene "EGFR" \
-  --per-class 0 \
-  --impact-per-class 0 \
+  --external-per-class 0 \
   --encoder "h-optimus-0" \
   --device "cuda" \
-  --limit-tiles 0 \
   --epochs 120
 ```
 
 HPC:
-- See `examples/slurm/submit_tcga_luad_EGFR_cv_to_impact.sh` and set `PER_CLASS=0` (and optionally `IMPACT_PER_CLASS=0`).
+- See `examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh` and set `PER_CLASS=0` (and optionally `EXTERNAL_PER_CLASS=0`).
 
 ## Notes
 

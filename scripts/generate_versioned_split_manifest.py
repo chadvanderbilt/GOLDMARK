@@ -42,7 +42,7 @@ def _derive_group_id(slide_id: str, cohort: str) -> str:
         if len(parts) >= 3:
             return "-".join(parts[:3])
         return slide_id
-    if cohort == "impact":
+    if cohort == "external":
         return slide_id.split("-", 2)[0] if "-" in slide_id else slide_id
     return slide_id
 
@@ -50,11 +50,11 @@ def _derive_group_id(slide_id: str, cohort: str) -> str:
 def _cohort_guess(series: pd.Series) -> str:
     sample = series.dropna().astype(str).head(50).tolist()
     tcga_hits = sum(1 for value in sample if value.upper().startswith("TCGA"))
-    impact_hits = sum(1 for value in sample if value.lower().startswith("imgp-"))
-    if tcga_hits >= impact_hits and tcga_hits > 0:
+    external_hits = sum(1 for value in sample if value.lower().startswith("imgp-"))
+    if tcga_hits >= external_hits and tcga_hits > 0:
         return "tcga"
-    if impact_hits > 0:
-        return "impact"
+    if external_hits > 0:
+        return "external"
     return "auto"
 
 
@@ -79,7 +79,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--cohort",
-        choices=["tcga", "impact", "auto"],
+        choices=["tcga", "external", "auto"],
         default="auto",
         help="Heuristic grouping when --group-column is not provided.",
     )

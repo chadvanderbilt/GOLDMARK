@@ -2,7 +2,7 @@
 """
 Convert aggregated tile coordinate tables into per-slide manifest CSVs.
 
-Historical IMPACT runs sometimes shipped a single ``tile_coords_XXx.csv``
+Historical external runs sometimes shipped a single ``tile_coords_XXx.csv``
 file instead of the per-slide ``*_tiles.csv`` manifests that the modern
 dashboard expects. This utility streams the coordinate table, groups rows
 by slide ID, and writes canonical manifests so feature extraction can run.

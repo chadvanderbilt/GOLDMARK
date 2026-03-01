@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -J luad_egfr_tcga_to_impact
+#SBATCH -J luad_egfr_tcga_to_external
 #SBATCH -p preemptable
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-# This SLURM example runs the end-to-end TCGA→IMPACT pipeline *from scratch*:
-#   GDC download → mutation labels (EGFR) → tiling → features → 5-split CV training → per-split test inference (attention) → external IMPACT inference
+# This SLURM example runs the end-to-end TCGA→external pipeline *from scratch*:
+#   GDC download → mutation labels (EGFR) → tiling → features → 5-split CV training → per-split test inference (attention) → external cohort inference
 #
 # Notes:
 # - Tokens are loaded from `configs/secrets.env` by default.
@@ -34,7 +34,7 @@ export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
 
 # Output configuration
 RUNS_ROOT="${RUNS_ROOT:-${REPO_ROOT}/runs}"
-RUN_NAME="${RUN_NAME:-tcga_luad_egfr_cv_to_impact_full}"
+RUN_NAME="${RUN_NAME:-tcga_luad_egfr_cv_to_external_full}"
 
 # Pipeline knobs
 ENCODER="${ENCODER:-h-optimus-0}"
@@ -46,10 +46,12 @@ GENE="${GENE:-EGFR}"
 # - per-class=0 labels *all* available cases (full cohort; very large)
 PER_CLASS="${PER_CLASS:-5}"
 
-# External IMPACT inference selection:
-# - impact-per-class=5 -> 10 total (smoke-test scale)
-# - impact-per-class=0 runs external inference on *all* labeled IMPACT cases (very large)
-IMPACT_PER_CLASS="${IMPACT_PER_CLASS:-5}"
+# External cohort inference selection:
+# - external-per-class=5 -> 10 total (smoke-test scale)
+# - external-per-class=0 runs external inference on *all* labeled external cases (very large)
+EXTERNAL_PER_CLASS="${EXTERNAL_PER_CLASS:-5}"
+EXTERNAL_MANIFEST="${EXTERNAL_MANIFEST:-}"
+EXTERNAL_ROOT="${EXTERNAL_ROOT:-}"
 
 # limit-tiles:
 # - 64 is fast but NOT “full slide”
@@ -59,16 +61,30 @@ LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-10}"
 PATIENCE="${PATIENCE:-50}"
 
-python scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+EXTERNAL_ARGS=()
+if [[ -n "${EXTERNAL_MANIFEST}" ]]; then
+  EXTERNAL_ARGS+=("--external-manifest" "${EXTERNAL_MANIFEST}")
+fi
+if [[ -n "${EXTERNAL_ROOT}" ]]; then
+  EXTERNAL_ARGS+=("--external-root" "${EXTERNAL_ROOT}")
+fi
+EXTERNAL_ARGS+=("--external-per-class" "${EXTERNAL_PER_CLASS}")
+
+LIMIT_ARGS=()
+if [[ "${LIMIT_TILES}" -gt 0 ]]; then
+  LIMIT_ARGS+=("--limit-tiles" "${LIMIT_TILES}")
+fi
+
+python scripts/tcga_cv_to_external_full_run.py \
   --output "${RUNS_ROOT}" \
   --run-name "${RUN_NAME}" \
   --project-id "TCGA-LUAD" \
   --gene "${GENE}" \
   --per-class "${PER_CLASS}" \
-  --impact-per-class "${IMPACT_PER_CLASS}" \
+  "${EXTERNAL_ARGS[@]}" \
   --encoder "${ENCODER}" \
   --device "cuda" \
-  --limit-tiles "${LIMIT_TILES}" \
+  "${LIMIT_ARGS[@]}" \
   --epochs "${EPOCHS}" \
   --patience "${PATIENCE}" \
   --force

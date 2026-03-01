@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Train a TCGA mutation model and run reciprocal external inference on IMPACT.
+"""Train a TCGA mutation model and run reciprocal external inference.
 
 This is a pragmatic, HPC-friendly smoke test that exercises the *actual* pieces you
-care about for "TCGA → IMPACT" evaluation:
+care about for "TCGA → external cohort" evaluation:
   - uses real mutation-derived labels (0/1) for a gene target (e.g., PIK3CA)
   - trains a MIL aggregator model from scratch on precomputed foundation features
-  - runs external inference on a small IMPACT subset (default: 1 slide) using the
+  - runs external inference on a small external subset (default: 1 slide) using the
     same encoder's feature tensors
   - exports attention weights (CSV + NPY) and (optionally) overlays
 
@@ -176,7 +176,7 @@ def _load_tcga_manifest(
     return out
 
 
-def _discover_impact_feature(
+def _discover_external_feature(
     feature_dir: Path,
     dmp_assay_id: str,
 ) -> Tuple[Path, Optional[Path]]:
@@ -192,7 +192,7 @@ def _discover_impact_feature(
     feature_path = next((p for p in candidates if p.exists()), None)
     if feature_path is None:
         raise FileNotFoundError(
-            f"IMPACT feature tensor not found for {dmp_assay_id} under {feature_dir}. Tried: "
+            f"External feature tensor not found for {dmp_assay_id} under {feature_dir}. Tried: "
             + ", ".join(str(p.name) for p in candidates)
         )
     meta_path = feature_path.with_suffix(".json")
@@ -223,11 +223,11 @@ def _infer_slide_path_from_tile_manifest(meta_path: Optional[Path]) -> Optional[
     return value or None
 
 
-def _load_impact_manifest(
+def _load_external_manifest(
     path: Path,
     *,
     gene: str,
-    impact_root: Path,
+    external_root: Path,
     encoder: str,
     dmp_assay_id: Optional[str],
     limit: int,
@@ -237,9 +237,9 @@ def _load_impact_manifest(
     df = pd.read_csv(path)
     gene_col = str(gene).strip().upper()
     if gene_col not in df.columns:
-        raise ValueError(f"IMPACT manifest missing gene column {gene_col!r}: {path}")
+        raise ValueError(f"External manifest missing gene column {gene_col!r}: {path}")
     if "DMP_ASSAY_ID" not in df.columns:
-        raise ValueError(f"IMPACT manifest missing DMP_ASSAY_ID column: {path}")
+        raise ValueError(f"External manifest missing DMP_ASSAY_ID column: {path}")
 
     if dmp_assay_id:
         df = df.loc[df["DMP_ASSAY_ID"].astype(str) == str(dmp_assay_id)].copy()
@@ -248,17 +248,17 @@ def _load_impact_manifest(
             df = df.loc[df["scanned_slides_exist"].map(_coerce_bool)].copy()
 
     if df.empty:
-        raise ValueError("No IMPACT rows selected (check --impact-dmp-assay-id or scanned_slides_exist).")
+        raise ValueError("No external rows selected (check --external-dmp-assay-id or scanned_slides_exist).")
 
-    # Infer which IMPACT cohort dir to use.
+    # Infer which external cohort dir to use.
     cohort = None
     if "OncoTree_Code" in df.columns:
         cohort = str(df["OncoTree_Code"].iloc[0]).strip().upper() or None
     cohort = cohort or "COAD"
-    cohort_dir = impact_root / cohort
+    cohort_dir = external_root / cohort
     feature_dir = cohort_dir / "features" / str(encoder)
     if not feature_dir.exists():
-        raise FileNotFoundError(f"IMPACT feature dir not found: {feature_dir}")
+        raise FileNotFoundError(f"External feature dir not found: {feature_dir}")
 
     rows: List[Dict[str, object]] = []
     take = min(int(limit), len(df)) if int(limit) > 0 else len(df)
@@ -267,7 +267,7 @@ def _load_impact_manifest(
         label = _map_binary_status(row.get(gene_col))
         if label is None:
             continue
-        feature_path, meta_path = _discover_impact_feature(feature_dir, dmp)
+        feature_path, meta_path = _discover_external_feature(feature_dir, dmp)
         slide_path = _infer_slide_path_from_tile_manifest(meta_path)
         rows.append(
             {
@@ -280,7 +280,7 @@ def _load_impact_manifest(
         )
     if not rows:
         raise ValueError(
-            f"No usable IMPACT rows found for {gene_col} (need Positive/Negative and matching feature tensors)."
+            f"No usable external rows found for {gene_col} (need Positive/Negative and matching feature tensors)."
         )
     return rows, feature_dir
 
@@ -343,7 +343,7 @@ def _maybe_write_roc_pr_plots(results_csv: Path, out_dir: Path, *, title: str) -
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="runs", help="Output root (default: runs/)")
-    parser.add_argument("--run-name", default="tcga_to_impact_smoke_test", help="Run name under --output")
+    parser.add_argument("--run-name", default="tcga_to_external_smoke_test", help="Run name under --output")
     parser.add_argument("--gene", default="PIK3CA", help="Gene target (default: PIK3CA)")
     parser.add_argument(
         "--tcga-root",
@@ -362,17 +362,17 @@ def main() -> int:
     parser.add_argument("--no-plots", action="store_true", help="Skip ROC/PR plot generation")
 
     parser.add_argument(
-        "--impact-manifest",
-        default="/data1/vanderbc/foundation_model_training_images/IMPACT/manifests/Colon_Adenocarcinoma_annotated_deidentified.csv",
-        help="IMPACT deidentified manifest csv (Colon Adenocarcinoma)",
+        "--external-manifest",
+        required=True,
+        help="External manifest csv (must include DMP_ASSAY_ID + gene labels).",
     )
     parser.add_argument(
-        "--impact-root",
-        default="/data1/vanderbc/foundation_model_training_images/IMPACT",
-        help="IMPACT dataset root (default: foundation_model_training_images/IMPACT)",
+        "--external-root",
+        required=True,
+        help="External dataset root (must contain cohort/features/<encoder>).",
     )
-    parser.add_argument("--impact-dmp-assay-id", default=None, help="Optional specific DMP_ASSAY_ID to run")
-    parser.add_argument("--impact-limit", type=int, default=1, help="Number of IMPACT slides to infer (default: 1)")
+    parser.add_argument("--external-dmp-assay-id", default=None, help="Optional specific DMP_ASSAY_ID to run")
+    parser.add_argument("--external-limit", type=int, default=1, help="Number of external slides to infer (default: 1)")
 
     parser.add_argument(
         "--secrets-env",
@@ -495,33 +495,33 @@ def main() -> int:
     if not args.no_plots:
         _maybe_write_roc_pr_plots(tcga_results, run_dir / "plots", title=f"TCGA {str(args.gene).upper()} ({args.encoder})")
 
-    # External IMPACT inference (default: 1 slide).
-    impact_manifest_path = Path(args.impact_manifest).expanduser().resolve()
-    impact_root = Path(args.impact_root).expanduser().resolve()
-    impact_rows, impact_feature_dir = _load_impact_manifest(
-        impact_manifest_path,
+    # External inference (default: 1 slide).
+    external_manifest_path = Path(args.external_manifest).expanduser().resolve()
+    external_root = Path(args.external_root).expanduser().resolve()
+    external_rows, external_feature_dir = _load_external_manifest(
+        external_manifest_path,
         gene=str(args.gene),
-        impact_root=impact_root,
+        external_root=external_root,
         encoder=str(args.encoder),
-        dmp_assay_id=args.impact_dmp_assay_id,
-        limit=int(args.impact_limit),
+        dmp_assay_id=args.external_dmp_assay_id,
+        limit=int(args.external_limit),
     )
-    impact_out_manifest = data_dir / f"impact_external_{str(args.gene).upper()}_{args.encoder}.csv"
+    external_out_manifest = data_dir / f"external_manifest_{str(args.gene).upper()}_{args.encoder}.csv"
     try:
         import pandas as pd
 
-        pd.DataFrame(impact_rows).to_csv(impact_out_manifest, index=False)
+        pd.DataFrame(external_rows).to_csv(external_out_manifest, index=False)
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Failed to write IMPACT smoke manifest: {impact_out_manifest}: {exc}") from exc
-    print(f"[impact] External manifest: {impact_out_manifest} (rows={len(impact_rows)})")
+        raise RuntimeError(f"Failed to write external smoke manifest: {external_out_manifest}: {exc}") from exc
+    print(f"[external] External manifest: {external_out_manifest} (rows={len(external_rows)})")
 
-    external_dir = run_dir / "external_inference" / "IMPACT"
+    external_dir = run_dir / "external_inference" / "external"
     external_dir.mkdir(parents=True, exist_ok=True)
     import pandas as pd
 
     runner = InferenceRunner(
-        manifest=pd.read_csv(impact_out_manifest),
-        feature_dir=impact_feature_dir,
+        manifest=pd.read_csv(external_out_manifest),
+        feature_dir=external_feature_dir,
         checkpoint_path=ckpt,
         output_dir=external_dir,
         target_column="label_index",
@@ -532,17 +532,17 @@ def main() -> int:
             export_attention=True,
         ),
     )
-    impact_results = runner.run()
-    print("\nTCGA→IMPACT smoke test complete.")
+    external_results = runner.run()
+    print("\nTCGA→external smoke test complete.")
     print(f"- Run dir: {run_dir}")
     print(f"- TCGA manifest: {tcga_out_manifest}")
     print(f"- TCGA checkpoint: {ckpt}")
     print(f"- TCGA inference results: {tcga_results}")
-    print(f"- IMPACT manifest: {impact_out_manifest}")
-    print(f"- IMPACT inference results: {impact_results}")
-    print(f"- IMPACT attention dir: {external_dir / 'attention'}")
+    print(f"- External manifest: {external_out_manifest}")
+    print(f"- External inference results: {external_results}")
+    print(f"- External attention dir: {external_dir / 'attention'}")
     if not args.no_overlays:
-        print(f"- IMPACT overlays dir: {external_dir / 'overlays'}")
+        print(f"- External overlays dir: {external_dir / 'overlays'}")
     return 0
 
 

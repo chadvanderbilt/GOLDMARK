@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install the NCI GDC Data Transfer Tool (`gdc-client`) locally.
 
-This repo uses `gdc-client` for downloading TCGA/IMPACT artifacts from the GDC.
+This repo uses `gdc-client` for downloading TCGA artifacts from the GDC.
 Rather than making users manually hunt for the right binary, this script downloads
 the official release zip for your platform and installs it into `bin/`.
 
@@ -185,4 +185,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

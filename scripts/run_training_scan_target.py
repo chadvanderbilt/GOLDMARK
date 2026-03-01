@@ -13,7 +13,7 @@ def _project_root(root: Path, cohort: str, tumor: str) -> Path:
     cohort = cohort.lower()
     if cohort == "tcga":
         return root / "TCGA" / f"TCGA-{tumor}_svs"
-    return root / "IMPACT" / tumor
+    return root / "EXTERNAL" / tumor
 
 
 def _missing_any_split(gma_root: Path, split_dirs: list, epoch: int) -> bool:
@@ -26,13 +26,13 @@ def _missing_any_split(gma_root: Path, split_dirs: list, epoch: int) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan encoders for a target and run training where epoch-120 is missing.")
-    parser.add_argument("--cohort", required=True, help="tcga or impact")
+    parser.add_argument("--cohort", required=True, help="tcga or external")
     parser.add_argument("--tumor", required=True, help="Tumor code (e.g., COAD)")
     parser.add_argument("--target", required=True, help="Target gene (e.g., PTEN)")
     parser.add_argument(
         "--root",
         default=os.environ.get("MIL_DATA_ROOT", "data/foundation_model_training_images"),
-        help="Training root containing TCGA/ and IMPACT/ (or set MIL_DATA_ROOT).",
+        help="Training root containing TCGA/ and EXTERNAL/ (or set MIL_DATA_ROOT).",
     )
     parser.add_argument(
         "--encoders",

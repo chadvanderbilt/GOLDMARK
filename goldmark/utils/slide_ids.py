@@ -9,7 +9,7 @@ def canonicalize_slide_id(raw_id: str) -> str:
     """
     Produce a canonical identifier for artifact generation.
 
-    IMPACT slides use DMP assay identifiers (P-XXXXXXX-TXX-IMX). Historical
+    External cohort slides may use DMP assay identifiers (P-XXXXXXX-TXX-IMX). Historical
     feature exports prefix these identifiers with ``img`` before writing tile
     manifests or feature tensors (e.g., ``features_imgP-0000123-T01-IM3.pt``).
     Returning the prefixed form keeps new exports aligned with the existing

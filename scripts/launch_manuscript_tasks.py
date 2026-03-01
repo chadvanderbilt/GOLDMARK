@@ -40,13 +40,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--cohorts",
-        default="tcga,impact",
-        help="Comma-separated cohorts to scan (default: tcga,impact)",
+        default="tcga,external",
+        help="Comma-separated cohorts to scan (default: tcga,external)",
     )
     parser.add_argument(
         "--root",
         default=os.environ.get("MIL_DATA_ROOT", "data/foundation_model_training_images"),
-        help="Training root containing TCGA/ and IMPACT/ (or set MIL_DATA_ROOT).",
+        help="Training root containing TCGA/ and EXTERNAL/ (or set MIL_DATA_ROOT).",
     )
     parser.add_argument(
         "--encoders",
@@ -78,7 +78,7 @@ def main() -> int:
 
     cohorts = _parse_list(args.cohorts)
     if not cohorts:
-        raise ValueError("--cohorts must include at least one cohort (tcga and/or impact).")
+        raise ValueError("--cohorts must include at least one cohort (tcga and/or external).")
 
     tasks = pd.read_csv(tasks_path)
     if "tumor_code" not in tasks.columns or "target" not in tasks.columns:
@@ -147,4 +147,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

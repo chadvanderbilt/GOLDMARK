@@ -260,19 +260,21 @@ def run_features(args: argparse.Namespace) -> None:
                 print(f"[feature-extractor] Generated tile manifest for {sample_id} from {source.name} -> {target_path}")
                 return target_path
         return None
+    feature_name_suffix = str(getattr(args, "feature_name_suffix", "") or "")
     missing_slides: List[str] = []
     processed_slides = 0
     for row in manifest.itertuples():
         raw_slide_id = getattr(row, args.slide_id_column)
         artifact_slide_id = canonicalize_slide_id(raw_slide_id)
         slide_path = getattr(row, args.slide_path_column)
-        feature_path = encoder_output_dir / f"features_{artifact_slide_id}.pt"
+        feature_slide_id = f"{artifact_slide_id}{feature_name_suffix}" if feature_name_suffix else artifact_slide_id
+        feature_path = encoder_output_dir / f"features_{feature_slide_id}.pt"
         if scope == "missing":
             try:
                 if feature_path.exists() and feature_path.stat().st_size > 0:
                     if tracker:
                         tracker.skip_slide(
-                            artifact_slide_id,
+                            feature_slide_id,
                             0,
                             0.0,
                             feature_path,
@@ -300,7 +302,7 @@ def run_features(args: argparse.Namespace) -> None:
         if not tile_manifest:
             if tracker:
                 tracker.fail_slide(
-                    artifact_slide_id,
+                    feature_slide_id,
                     0,
                     0.0,
                     f"Tile manifest for {raw_slide_id} not found in {tile_manifest_dir}",
@@ -315,7 +317,7 @@ def run_features(args: argparse.Namespace) -> None:
             if tile_manifest.stat().st_size == 0:
                 message = f"Tile manifest {tile_manifest} is empty; skipping {raw_slide_id}"
                 if tracker:
-                    tracker.fail_slide(artifact_slide_id, 0, 0.0, message)
+                    tracker.fail_slide(feature_slide_id, 0, 0.0, message)
                 print(f"[feature-extractor] Warning: {message}")
                 missing_slides.append(str(raw_slide_id))
                 continue
@@ -325,7 +327,7 @@ def run_features(args: argparse.Namespace) -> None:
             extractor.extract(
                 slide_path,
                 tile_manifest,
-                slide_id=artifact_slide_id,
+                slide_id=feature_slide_id,
                 progress=tracker,
             )
             processed_slides += 1
@@ -479,7 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_parser.add_argument("input", help="Path to manifest (csv/tsv)")
     manifest_parser.add_argument("output", help="Destination csv for normalized manifest")
     manifest_parser.add_argument("--slide-root", help="Base directory containing SVS files")
-    manifest_parser.add_argument("--dataset-type", choices=["impact", "cptac", "tcga", "generic"], help="Force manifest type")
+    manifest_parser.add_argument("--dataset-type", choices=["external", "cptac", "tcga", "generic"], help="Force manifest type")
     manifest_parser.add_argument("--target", nargs="*", help="Explicit target columns")
     manifest_parser.set_defaults(func=normalize_manifest)
 
@@ -524,6 +526,11 @@ def build_parser() -> argparse.ArgumentParser:
     features_parser.add_argument(
         "--encoder-output-name",
         help="Directory name (under the features stage) for this encoder's tensors",
+    )
+    features_parser.add_argument(
+        "--feature-name-suffix",
+        default="",
+        help="Optional suffix appended to per-slide feature filenames (e.g., _40x).",
     )
     features_parser.add_argument("--device", default="auto")
     features_parser.add_argument("--gpu-min-free-gb", type=float, default=2.0)

@@ -25,6 +25,6 @@ PYTHONPATH=. python scripts/run_inference_from_plan.py \
   --tcga-checkpoints "best,120" \
   --continue-on-error \
   --error-log "logs/attn_external_example_failures.log" \
-  --filter-cohort "impact" \
+  --filter-cohort "external" \
   --filter-tumor "BLCA" \
   --filter-target "ERBB2"

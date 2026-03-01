@@ -34,12 +34,12 @@ def _context_from_root(gma_root: Path) -> Dict[str, str]:
 
 def _resolve_external_cfg(gma_root: Path, cohort: str) -> str:
     cohort = (cohort or "").lower()
-    if cohort == "impact":
+    if cohort == "external":
         subdir = "tcga_inference"
         cfg_name = "tcga_run_config.json"
     else:
-        subdir = "impact_inference"
-        cfg_name = "impact_run_config.json"
+        subdir = "external_inference"
+        cfg_name = "external_run_config.json"
 
     name = gma_root.name
     if name.endswith("_gma_pub"):
@@ -107,36 +107,36 @@ def _build_external_manifest_from_splits(
     return out_csv
 
 
-def _maybe_write_impact_external_config(
+def _maybe_write_external_config(
     foundation_root: Path,
     tumor: str,
     target: str,
     encoder: str,
     gma_root: Path,
 ) -> Optional[Path]:
-    impact_root = Path(foundation_root) / "IMPACT" / tumor
-    if not impact_root.exists():
+    external_root = Path(foundation_root) / "EXTERNAL" / tumor
+    if not external_root.exists():
         return None
-    target_dir = impact_root / "checkpoints" / target
+    target_dir = external_root / "checkpoints" / target
     if not target_dir.exists():
         return None
     manifest_path = _find_latest_manifest(target_dir / "versioned_split_manifest", target)
     if manifest_path is None or not manifest_path.exists():
         return None
-    out_dir = Path("tmp/impact_external_manifests")
+    out_dir = Path("tmp/external_manifests")
     safe_encoder = encoder.replace("/", "_")
-    out_csv = out_dir / f"impact_{tumor}_{target}_{safe_encoder}.csv"
+    out_csv = out_dir / f"external_{tumor}_{target}_{safe_encoder}.csv"
     built = _build_external_manifest_from_splits(manifest_path, target, out_csv)
     if built is None:
         return None
-    tile_size = _infer_tile_size_from_features(impact_root, encoder)
-    cfg_path = out_dir / f"impact_{tumor}_{target}_{safe_encoder}_config.json"
+    tile_size = _infer_tile_size_from_features(external_root, encoder)
+    cfg_path = out_dir / f"external_{tumor}_{target}_{safe_encoder}_config.json"
     cfg = {
-        "impact_manifest": str(built),
-        "impact_root": str(impact_root),
-        "tiling_dir": str(impact_root / "tiling"),
+        "external_manifest": str(built),
+        "external_root": str(external_root),
+        "tiling_dir": str(external_root / "tiling"),
         "tile_size": tile_size,
-        "mode": "impact",
+        "mode": "external",
     }
     cfg_path.write_text(json.dumps(cfg, indent=2))
     return cfg_path
@@ -207,8 +207,8 @@ def _ensure_tile_manifests_from_config(cfg_path: Path, encoder: str) -> None:
         cfg = json.loads(cfg_path.read_text())
     except Exception:
         return
-    manifest_path = Path(cfg.get("impact_manifest") or cfg.get("manifest") or "")
-    root_dir = Path(cfg.get("impact_root") or cfg.get("root") or "")
+    manifest_path = Path(cfg.get("external_manifest") or cfg.get("manifest") or "")
+    root_dir = Path(cfg.get("external_root") or cfg.get("root") or "")
     tiling_dir = Path(cfg.get("tiling_dir") or (root_dir / "tiling"))
     if not manifest_path.exists() or manifest_path.is_dir() or not root_dir.exists() or not tiling_dir.exists():
         return
@@ -225,7 +225,7 @@ def _ensure_tile_manifests_from_config(cfg_path: Path, encoder: str) -> None:
         print(f"[warn] Missing tile coords for manifest generation: {coords_path}", flush=True)
         return
 
-    whitelist_path = Path("tmp/impact_external_manifests") / f"whitelist_{root_dir.name}_{encoder}.txt"
+    whitelist_path = Path("tmp/external_manifests") / f"whitelist_{root_dir.name}_{encoder}.txt"
     whitelist_path.parent.mkdir(parents=True, exist_ok=True)
     slide_ids = []
     with manifest_path.open("r", newline="") as handle:
@@ -322,16 +322,16 @@ def main() -> int:
     parser.add_argument(
         "--foundation-root",
         default=os.environ.get("MIL_DATA_ROOT", "data/foundation_model_training_images"),
-        help="Root containing TCGA/ and IMPACT/ (or set MIL_DATA_ROOT).",
+        help="Root containing TCGA/ and EXTERNAL/ (or set MIL_DATA_ROOT).",
     )
     parser.add_argument("--tcga-checkpoints", default="best", help="External checkpoints (best or epochs).")
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-cv", action="store_true")
     parser.add_argument("--pub-only", action="store_true")
     parser.add_argument(
-        "--external-from-impact-manifest",
+        "--external-from-manifest",
         action="store_true",
-        help="If no external config exists for TCGA models, build one from IMPACT split manifests.",
+        help="If no external config exists for TCGA models, build one from external split manifests.",
     )
     parser.add_argument(
         "--ensure-tiling-manifests",
@@ -395,7 +395,7 @@ def main() -> int:
         if args.purge_attn_index:
             cv_attn_dir = gma_root / "tile_attn" / "inference"
             _purge_attn_indices(cv_attn_dir, "cv", splits, epochs)
-            external_label = "tcga_inference" if ctx["cohort"] == "impact" else "impact_inference"
+            external_label = "tcga_inference" if ctx["cohort"] == "external" else "external_inference"
             ext_attn_dir = gma_root / "tile_attn" / external_label
             _purge_attn_indices(ext_attn_dir, external_label, splits, epochs)
         cmd = [
@@ -416,8 +416,8 @@ def main() -> int:
             cmd.append("--skip-external")
         else:
             external_cfg = _resolve_external_cfg(gma_root, ctx["cohort"])
-            if not external_cfg and args.external_from_impact_manifest and ctx["cohort"] == "tcga":
-                cfg_path = _maybe_write_impact_external_config(
+            if not external_cfg and args.external_from_manifest and ctx["cohort"] == "tcga":
+                cfg_path = _maybe_write_external_config(
                     foundation_root,
                     ctx["tumor"],
                     ctx["target"],
@@ -427,7 +427,7 @@ def main() -> int:
                 external_cfg = str(cfg_path) if cfg_path else ""
                 if not external_cfg:
                     print(
-                        f"[warn] Missing IMPACT manifest for external config: tumor={ctx['tumor']} "
+                        f"[warn] Missing external manifest for external config: tumor={ctx['tumor']} "
                         f"target={ctx['target']} encoder={ctx['encoder']}",
                         flush=True,
                     )
@@ -435,7 +435,7 @@ def main() -> int:
                 if args.ensure_tiling_manifests:
                     _ensure_tile_manifests_from_config(Path(external_cfg), ctx["encoder"])
                 cmd.extend(["--external-config", external_cfg])
-            elif ctx["cohort"] == "impact":
+            elif ctx["cohort"] == "external":
                 print(f"[warn] Missing external config for {gma_root}; external inference may be skipped.")
         if args.skip_cv:
             cmd.append("--skip-cv")

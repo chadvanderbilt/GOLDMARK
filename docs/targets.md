@@ -1,4 +1,4 @@
-# Target construction (TCGA + IMPACT)
+# Target construction (TCGA + external)
 
 This repository separates **label generation** (“targets”) from WSI preprocessing and model training.
 That separation is intentional: target definitions can change (e.g., stricter clinical criteria), and the
@@ -75,12 +75,12 @@ python targets/tcga/build_slide_manifest_from_svs_and_mutations.py \
   --output data/manifests/TCGA_PTEN_slide_manifest.csv
 ```
 
-## IMPACT (minimal public example)
+## External cohort (minimal public example)
 
-This repo does **not** ship clinical IMPACT data. For documentation and schema parity only, we include
+This repo does **not** ship clinical external data. For documentation and schema parity only, we include
 the **header** of a cohort manifest:
 
-- `examples/manifests/impact_LUAD_manifest_header.csv`
+- `examples/manifests/external_LUAD_manifest_header.csv`
 
 ## Split manifests (versioned, patient-level)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end TCGA-LUAD → IMPACT (EGFR) example.
+# End-to-end TCGA-LUAD → external cohort (EGFR) example.
 # This runs in the foreground (not nohup); use RUN_MODE=resume to pick up partial runs.
 
 REPO_ROOT="${REPO_ROOT:-/data1/vanderbc/vanderbc/GOLDMARK}"
@@ -36,7 +36,9 @@ TARGET_MPP="${TARGET_MPP:-0.5}"
 EXTRA_TARGET_MPP="${EXTRA_TARGET_MPP:-0.25}"
 
 PER_CLASS="${PER_CLASS:-0}"
-IMPACT_PER_CLASS="${IMPACT_PER_CLASS:-0}"
+EXTERNAL_PER_CLASS="${EXTERNAL_PER_CLASS:-0}"
+EXTERNAL_MANIFEST="${EXTERNAL_MANIFEST:-}"
+EXTERNAL_ROOT="${EXTERNAL_ROOT:-}"
 LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-10}"
 PATIENCE="${PATIENCE:-50}"
@@ -54,6 +56,18 @@ TILING_ARGS=(--target-mpp "${TARGET_MPP}")
 if [[ -n "${EXTRA_TARGET_MPP}" ]]; then
   TILING_ARGS+=(--extra-target-mpp "${EXTRA_TARGET_MPP}")
 fi
+EXTERNAL_ARGS=()
+if [[ -n "${EXTERNAL_MANIFEST}" ]]; then
+  EXTERNAL_ARGS+=(--external-manifest "${EXTERNAL_MANIFEST}")
+fi
+if [[ -n "${EXTERNAL_ROOT}" ]]; then
+  EXTERNAL_ARGS+=(--external-root "${EXTERNAL_ROOT}")
+fi
+EXTERNAL_ARGS+=(--external-per-class "${EXTERNAL_PER_CLASS}")
+LIMIT_ARGS=()
+if [[ "${LIMIT_TILES}" -gt 0 ]]; then
+  LIMIT_ARGS+=(--limit-tiles "${LIMIT_TILES}")
+fi
 
 PYTHON_BIN="${PYTHON_BIN:-/data1/vanderbc/vanderbc/anaconda3/envs/running_ft/bin/python}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
@@ -67,17 +81,17 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   fi
 fi
 
-"${PYTHON_BIN}" scripts/tcga_luad_kras_cv_to_impact_smoke_test.py \
+"${PYTHON_BIN}" scripts/tcga_cv_to_external_full_run.py \
   --output "${RUNS_ROOT}" \
   --run-name "${RUN_NAME}" \
   --project-id "${PROJECT_ID}" \
   --gene "${GENE}" \
   --per-class "${PER_CLASS}" \
-  --impact-per-class "${IMPACT_PER_CLASS}" \
+  "${EXTERNAL_ARGS[@]}" \
   --encoder "${ENCODER}" \
   --device "${DEVICE}" \
   "${TILING_ARGS[@]}" \
-  --limit-tiles "${LIMIT_TILES}" \
+  "${LIMIT_ARGS[@]}" \
   --epochs "${EPOCHS}" \
   --patience "${PATIENCE}" \
   "${EXTRA_ARGS[@]}"

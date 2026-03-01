@@ -162,12 +162,12 @@ def _extract_tcga_tumor(project_root: Path) -> Optional[str]:
     return match.group(1)
 
 
-def _resolve_impact_project_root(tcga_project_root: Path) -> Optional[Path]:
+def _resolve_external_project_root(tcga_project_root: Path) -> Optional[Path]:
     tumor = _extract_tcga_tumor(tcga_project_root)
     if not tumor:
         return None
     base_root = tcga_project_root.parent.parent
-    candidate = base_root / "IMPACT" / tumor
+    candidate = base_root / "EXTERNAL" / tumor
     return candidate if candidate.exists() else None
 
 
@@ -820,16 +820,16 @@ def _build_tcga_entries(
     return entries
 
 
-def _build_impact_entries(
-    impact_manifest: pd.DataFrame,
+def _build_external_entries(
+    external_manifest: pd.DataFrame,
     target_col: str,
     feature_dir: Path,
     prefix: str,
     limit: Optional[int] = None,
 ) -> List[SlideEntry]:
-    df = impact_manifest.copy()
+    df = external_manifest.copy()
     if target_col not in df.columns:
-        raise ValueError(f"Impact manifest missing target column: {target_col}")
+        raise ValueError(f"External manifest missing target column: {target_col}")
     df = df[df[target_col].notna()].copy()
     # Normalize target values so string labels like "Positive"/"Negative" are supported.
     def _coerce_target(value: object) -> Optional[int]:
@@ -877,14 +877,18 @@ def _load_external_config(cfg_path: Path) -> Tuple[pd.DataFrame, Optional[Path],
     if not cfg_path.exists():
         raise FileNotFoundError(f"External config not found: {cfg_path}")
     cfg = json.loads(cfg_path.read_text())
-    manifest_path = cfg.get("tcga_manifest") or cfg.get("impact_manifest") or cfg.get("manifest")
+    manifest_path = cfg.get("tcga_manifest") or cfg.get("external_manifest") or cfg.get("manifest")
     if not manifest_path:
         raise ValueError(f"External config missing manifest path: {cfg_path}")
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
         raise FileNotFoundError(f"External manifest not found: {manifest_path}")
     tiling_dir = Path(cfg.get("tiling_dir")) if cfg.get("tiling_dir") else None
-    root_dir = Path(cfg.get("tcga_root") or cfg.get("impact_root") or cfg.get("root")) if (cfg.get("tcga_root") or cfg.get("impact_root") or cfg.get("root")) else None
+    root_dir = (
+        Path(cfg.get("tcga_root") or cfg.get("external_root") or cfg.get("root"))
+        if (cfg.get("tcga_root") or cfg.get("external_root") or cfg.get("root"))
+        else None
+    )
     tile_size = int(cfg.get("tilesize") or cfg.get("tile_size") or 224)
     manifest = pd.read_csv(manifest_path)
     if "slide_path" not in manifest.columns:
@@ -1215,7 +1219,7 @@ def _run_inference(
         print(f"[warn] No valid slides processed for {output_dir} epoch {epoch}; skipping metrics", flush=True)
         return
 
-    if prediction_schema == "impact":
+    if prediction_schema == "external":
         pred_df = pd.DataFrame(
             {
                 "slide_id": slide_ids,
@@ -1272,7 +1276,7 @@ def _run_inference(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run GMA inference and tile attention exports.")
     parser.add_argument("--gma-root", required=True, help="Path to <TARGET>_gma directory.")
-    parser.add_argument("--external-config", help="Path to external inference config (tcga_run_config.json or impact_run_config.json).")
+    parser.add_argument("--external-config", help="Path to external inference config (tcga_run_config.json or external_run_config.json).")
     parser.add_argument("--tcga-config", help="Deprecated: use --external-config.")
     parser.add_argument("--splits", help="Comma-separated split names (e.g. split_1_set).")
     parser.add_argument(
@@ -1339,23 +1343,23 @@ def main() -> int:
         )
         # Infer which cohort the external config represents. When users pass
         # --external-config explicitly, we should not assume TCGA unconditionally:
-        # - IMPACT-trained models typically validate on TCGA
-        # - TCGA-trained models typically validate on IMPACT
+        # - External-trained models typically validate on TCGA
+        # - TCGA-trained models typically validate on external
         mode_hint = ""
         try:
             cfg_payload = json.loads(external_cfg_path.read_text())
             mode_hint = str(cfg_payload.get("mode") or "").strip().lower()
             if not mode_hint:
-                if cfg_payload.get("impact_manifest") or cfg_payload.get("impact_root"):
-                    mode_hint = "impact"
+                if cfg_payload.get("external_manifest") or cfg_payload.get("external_root"):
+                    mode_hint = "external"
                 elif cfg_payload.get("tcga_manifest") or cfg_payload.get("tcga_root"):
                     mode_hint = "tcga"
         except Exception:
             mode_hint = ""
-        if mode_hint in {"impact", "tcga"}:
+        if mode_hint in {"external", "tcga"}:
             external_mode = mode_hint
         else:
-            external_mode = "tcga" if cohort == "impact" else "impact"
+            external_mode = "tcga" if cohort == "external" else "external"
         if external_root is not None:
             candidate = external_root / "features" / encoder
             if candidate.exists():
@@ -1365,17 +1369,18 @@ def main() -> int:
         if external_feature_dir is not None and external_feature_dir.exists():
             external_prefix = _detect_feature_prefix(external_feature_dir)
     elif cohort == "tcga":
-        impact_root = _resolve_impact_project_root(project_root)
-        impact_manifest_path = impact_root / "dashboard_manifests" / "normalized_manifest.csv" if impact_root else None
-        if impact_manifest_path and impact_manifest_path.exists():
-            external_manifest = pd.read_csv(impact_manifest_path)
-            external_feature_dir = impact_root / "features" / encoder if impact_root else None
+        external_root = _resolve_external_project_root(project_root)
+        external_manifest_path = (
+            external_root / "dashboard_manifests" / "normalized_manifest.csv" if external_root else None
+        )
+        if external_manifest_path and external_manifest_path.exists():
+            external_manifest = pd.read_csv(external_manifest_path)
+            external_feature_dir = external_root / "features" / encoder if external_root else None
             if external_feature_dir and external_feature_dir.exists():
                 external_prefix = _detect_feature_prefix(external_feature_dir)
-            external_tiling_dir = impact_root / "tiling" if impact_root else None
-            external_root = impact_root
+            external_tiling_dir = external_root / "tiling" if external_root else None
             external_tile_size = 224
-            external_mode = "impact"
+            external_mode = "external"
     if args.skip_external:
         external_manifest = None
         external_mode = None
@@ -1419,8 +1424,8 @@ def main() -> int:
                     print("[warn] External config incomplete; skipping external mismatch scan", flush=True)
                     external_scanned = True
                     continue
-                if external_mode == "impact":
-                    external_entries = _build_impact_entries(
+                if external_mode == "external":
+                    external_entries = _build_external_entries(
                         external_manifest,
                         target,
                         external_feature_dir,
@@ -1491,7 +1496,7 @@ def main() -> int:
                     feature_dir,
                     args.allow_mismatch,
                     args.overwrite_attn,
-                    prediction_schema="impact",
+                    prediction_schema="external",
                     tumor_label=tumor_label,
                     target=target,
                     encoder=encoder,
@@ -1502,10 +1507,10 @@ def main() -> int:
         if external_manifest is None or external_mode is None:
             continue
 
-        if external_mode == "impact":
+        if external_mode == "external":
             if external_feature_dir is None:
-                raise ValueError("External feature directory not resolved for IMPACT inference.")
-            external_entries = _build_impact_entries(
+                raise ValueError("External feature directory not resolved for external inference.")
+            external_entries = _build_external_entries(
                 external_manifest,
                 target,
                 external_feature_dir,
@@ -1558,8 +1563,8 @@ def main() -> int:
                 if path is not None:
                     external_epochs.append((epoch_val, path))
 
-        external_label = "tcga_inference" if cohort == "impact" else "impact_inference"
-        external_schema = "tcga" if cohort == "impact" else "impact"
+        external_label = "tcga_inference" if cohort == "external" else "external_inference"
+        external_schema = "tcga" if cohort == "external" else "external"
         if external_epochs:
             print(
                 f"[external] {gma_root} {split_col} epochs={','.join(str(e) for e, _ in external_epochs)}",
@@ -1576,7 +1581,7 @@ def main() -> int:
                 external_dir = split_dir / external_label / f"ckpt_best_{epoch:03d}"
             else:
                 external_dir = split_dir / external_label / f"ckpt_{epoch:03d}"
-            infer_tag = "TCGA" if external_label == "tcga_inference" else "IMPACT"
+            infer_tag = "TCGA" if external_label == "tcga_inference" else "EXTERNAL"
             attn_column = (
                 f"attn_{tumor_label}_{target}_{encoder}_{split_col.replace('_set','')}_inf_{infer_tag}_ckpt{epoch}"
             )
