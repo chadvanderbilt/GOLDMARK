@@ -341,6 +341,9 @@ When `EXTRA_TARGET_MPP` is set, the additional tiling pass writes to:
 Feature tensors are saved as PyTorch `.pt` files with rows aligned to the slide’s tile manifest order,
 so each row can be joined back to tile coordinates using the corresponding tile manifest CSV.
 
+**Performance note:** the feature extractor auto-tunes GPU batch size based on available VRAM and uses
+CPU data loader workers to keep the GPU fed. You can override both via `--batch-size` and `--num-workers`.
+
 When `EXTRA_TARGET_MPP` is set, the additional feature pass writes **into the same encoder directory**
 using a filename suffix:
 - `runs/<project-id>/features/<encoder>/features_<slide_id>_40x.pt` (for `EXTRA_TARGET_MPP=0.25`)
