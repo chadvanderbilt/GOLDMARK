@@ -140,7 +140,7 @@ URL: https://huggingface.co/MCCPBR/EAGLE
 
 **Access**
 - Hugging Face access (gated); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
-- Local checkpoint path is supported via `MIL_UNI_CHECKPOINT` or `weights/uni_checkpoint.pth`.
+- If you already have weights locally, point `MIL_UNI_CHECKPOINT` to the file (fallback: `weights/uni_checkpoint.pth`).
 
 **Hugging Face (more details)**
 ```
