@@ -343,6 +343,8 @@ so each row can be joined back to tile coordinates using the corresponding tile 
 
 **Performance note:** the feature extractor auto-tunes GPU batch size based on available VRAM and uses
 CPU data loader workers to keep the GPU fed. You can override both via `--batch-size` and `--num-workers`.
+As a rule of thumb, start with `--num-workers 4` and increase to 8–16 on beefy GPU nodes if CPU
+tile decoding becomes the bottleneck.
 
 When `EXTRA_TARGET_MPP` is set, the additional feature pass writes **into the same encoder directory**
 using a filename suffix:
