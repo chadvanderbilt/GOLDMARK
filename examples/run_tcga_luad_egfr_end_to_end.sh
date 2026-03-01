@@ -13,7 +13,8 @@ if [[ "${SKIP_ENV_SETUP:-0}" != "1" ]]; then
   # shellcheck disable=SC1091
   source /home/vanderbc/.bashrc
   set -u
-  conda activate running_ft
+  CONDA_ENV="${CONDA_ENV:-goldmark}"
+  conda activate "${CONDA_ENV}"
 fi
 
 # Load tokens if present.
@@ -69,7 +70,7 @@ if [[ "${LIMIT_TILES}" -gt 0 ]]; then
   LIMIT_ARGS+=(--limit-tiles "${LIMIT_TILES}")
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-/data1/vanderbc/vanderbc/anaconda3/envs/running_ft/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-/data1/vanderbc/vanderbc/anaconda3/envs/goldmark/bin/python}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
   if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="$(command -v python3)"

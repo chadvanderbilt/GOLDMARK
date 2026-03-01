@@ -263,26 +263,46 @@ def run_features(args: argparse.Namespace) -> None:
     feature_name_suffix = str(getattr(args, "feature_name_suffix", "") or "")
     missing_slides: List[str] = []
     processed_slides = 0
+    expected_tile_size = int(getattr(args, "tile_size", 224))
+
+    def _feature_matches_expected(meta_path: Path, expected: int) -> bool:
+        if not meta_path.exists():
+            return False
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        try:
+            return int(payload.get("tile_size", -1)) == int(expected)
+        except Exception:
+            return False
     for row in manifest.itertuples():
         raw_slide_id = getattr(row, args.slide_id_column)
         artifact_slide_id = canonicalize_slide_id(raw_slide_id)
         slide_path = getattr(row, args.slide_path_column)
         feature_slide_id = f"{artifact_slide_id}{feature_name_suffix}" if feature_name_suffix else artifact_slide_id
         feature_path = encoder_output_dir / f"features_{feature_slide_id}.pt"
+        meta_path = encoder_output_dir / f"features_{feature_slide_id}.json"
         if scope == "missing":
             try:
                 if feature_path.exists() and feature_path.stat().st_size > 0:
-                    if tracker:
-                        tracker.skip_slide(
-                            feature_slide_id,
-                            0,
-                            0.0,
-                            feature_path,
-                            reason="existing_features",
+                    if not _feature_matches_expected(meta_path, expected_tile_size):
+                        print(
+                            f"[feature-extractor] Re-extracting {raw_slide_id} "
+                            f"(tile_size mismatch or missing metadata)."
                         )
-                    print(f"[feature-extractor] Skipping {raw_slide_id} (features already exist).")
-                    processed_slides += 1
-                    continue
+                    else:
+                        if tracker:
+                            tracker.skip_slide(
+                                feature_slide_id,
+                                0,
+                                0.0,
+                                feature_path,
+                                reason="existing_features",
+                            )
+                        print(f"[feature-extractor] Skipping {raw_slide_id} (features already exist).")
+                        processed_slides += 1
+                        continue
             except OSError:
                 pass
         manifest_candidates = [

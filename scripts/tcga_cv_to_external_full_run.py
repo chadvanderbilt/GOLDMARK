@@ -165,6 +165,82 @@ def _mpp_label(value: float) -> str:
     return f"mpp_{_mpp_slug(value)}"
 
 
+def _available_mpp_targets(target_mpp: float, extra_target_mpp: str) -> List[float]:
+    targets = [float(target_mpp)]
+    for value in _parse_extra_target_mpp(extra_target_mpp):
+        targets.append(float(value))
+    unique: List[float] = []
+    for value in targets:
+        if not any(abs(value - existing) < 1e-6 for existing in unique):
+            unique.append(value)
+    return sorted(unique, reverse=True)
+
+
+def _choose_mpp_bucket(mpp_value: Optional[float], targets: Sequence[float]) -> float:
+    if not targets:
+        raise ValueError("No target MPP values provided.")
+    if mpp_value is None or mpp_value <= 0:
+        return max(targets)
+    return min(targets, key=lambda target: abs(float(mpp_value) - float(target)))
+
+
+def _scale_tile_size(base_tile_size: int, base_mpp: float, target_mpp: float) -> int:
+    if target_mpp <= 0:
+        return int(base_tile_size)
+    scaled = int(round(float(base_tile_size) * float(base_mpp) / float(target_mpp)))
+    return max(1, scaled)
+
+
+def _read_slide_mpp(slide_path: Path) -> Tuple[Optional[float], Optional[float]]:
+    try:
+        import openslide  # type: ignore
+    except Exception:
+        return None, None
+    try:
+        slide = openslide.OpenSlide(str(slide_path))
+    except Exception:
+        return None, None
+    try:
+        mpp_x = slide.properties.get(openslide.PROPERTY_NAME_MPP_X, "")
+        mpp_y = slide.properties.get(openslide.PROPERTY_NAME_MPP_Y, "")
+    finally:
+        slide.close()
+    try:
+        mpp_x_val = float(mpp_x) if mpp_x not in ("", None) else None
+    except (TypeError, ValueError):
+        mpp_x_val = None
+    try:
+        mpp_y_val = float(mpp_y) if mpp_y not in ("", None) else None
+    except (TypeError, ValueError):
+        mpp_y_val = None
+    return mpp_x_val, mpp_y_val
+
+
+def _ensure_slide_mpp_columns(slide_manifest: Path) -> "pd.DataFrame":
+    import pandas as pd
+
+    df = pd.read_csv(slide_manifest)
+    if "slide_path" not in df.columns:
+        return df
+    needs_mpp = "mpp_x" not in df.columns or "mpp_y" not in df.columns
+    if not needs_mpp:
+        if df["mpp_x"].isna().any() or df["mpp_y"].isna().any():
+            needs_mpp = True
+    if not needs_mpp:
+        return df
+    mpp_x_vals: List[Optional[float]] = []
+    mpp_y_vals: List[Optional[float]] = []
+    for row in df.itertuples():
+        slide_path = Path(getattr(row, "slide_path"))
+        mpp_x, mpp_y = _read_slide_mpp(slide_path)
+        mpp_x_vals.append(mpp_x)
+        mpp_y_vals.append(mpp_y)
+    df["mpp_x"] = mpp_x_vals
+    df["mpp_y"] = mpp_y_vals
+    df.to_csv(slide_manifest, index=False)
+    return df
+
+
 def _parse_extra_target_mpp(raw: str) -> List[float]:
     raw = str(raw or "").strip()
     if not raw:
@@ -395,6 +471,56 @@ def _write_tile_coords(
                             "target": str(project_id),
                         }
                     )
+
+
+def _write_bucketed_split_manifests(
+    split_manifest: Path,
+    slide_df: "pd.DataFrame",
+    run_dir: Path,
+    targets: Sequence[float],
+) -> Dict[str, Path]:
+    import pandas as pd
+
+    split_df = pd.read_csv(split_manifest)
+    if "slide_id" not in split_df.columns:
+        return {}
+    bucket_map = {
+        str(getattr(row, "slide_id")): str(getattr(row, "bucket_label"))
+        for row in slide_df.itertuples()
+    }
+    default_label = _mpp_label(max(targets))
+    split_df["bucket_label"] = split_df["slide_id"].map(bucket_map).fillna(default_label)
+    out_dir = run_dir / "tiling"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outputs: Dict[str, Path] = {}
+    for target_mpp in targets:
+        label = _mpp_label(target_mpp)
+        subset = split_df[split_df["bucket_label"] == label].drop(columns=["bucket_label"])
+        out_path = out_dir / f"split_manifest_{label}.csv"
+        subset.to_csv(out_path, index=False)
+        outputs[label] = out_path
+    return outputs
+
+
+def _manifest_has_rows(path: Path) -> bool:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            header = handle.readline()
+            if not header:
+                return False
+            for line in handle:
+                if line.strip():
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _tile_manifests_present(tile_dir: Path) -> bool:
+    manifest_dir = tile_dir / "manifests"
+    if not manifest_dir.exists():
+        return False
+    return any(manifest_dir.glob("*_tiles.csv"))
 def _case_column_from_manifest(df) -> Optional[str]:
     for col in ("patient_id", "case_id", "group_id", "sample_id"):
         if col in df.columns:
@@ -1320,7 +1446,10 @@ def main() -> int:
     parser.add_argument(
         "--extra-target-mpp",
         default="0.25",
-        help="Comma-separated extra target-mpp values to tile within the same run (default: 0.25 for 40x).",
+        help=(
+            "Comma-separated target-mpp buckets (default: 0.25 for 40x). "
+            "Each slide is assigned to the nearest bucket and tiled once."
+        ),
     )
     parser.add_argument("--limit-tiles", type=int, default=0, help="Optional tile cap per slide (default: 0 = no cap).")
     parser.add_argument("--encoder", default="h-optimus-0")
@@ -1526,8 +1655,36 @@ def main() -> int:
     if not slide_manifest.exists():
         raise FileNotFoundError(f"Slide manifest missing: {slide_manifest}")
 
+    mpp_targets = _available_mpp_targets(args.target_mpp, args.extra_target_mpp)
+    base_mpp = max(mpp_targets)
+    slide_df = _ensure_slide_mpp_columns(slide_manifest)
+    bucket_mpp: List[float] = []
+    bucket_label: List[str] = []
+    for row in slide_df.itertuples():
+        mpp_val = getattr(row, "mpp_x", None) or getattr(row, "mpp_y", None)
+        chosen = _choose_mpp_bucket(mpp_val, mpp_targets)
+        bucket_mpp.append(float(chosen))
+        bucket_label.append(_mpp_label(chosen))
+    slide_df["bucket_mpp"] = bucket_mpp
+    slide_df["bucket_label"] = bucket_label
+
     slide_index, tiling_manifest_rows = _load_slide_index(slide_manifest, run_dir, str(args.project_id))
     _write_tiling_manifest(run_dir, tiling_manifest_rows, resume=bool(args.resume))
+
+    tiling_manifest_dir = run_dir / "tiling"
+    tiling_manifest_dir.mkdir(parents=True, exist_ok=True)
+    bucket_tiling_manifests: Dict[str, Path] = {}
+    for target_mpp in mpp_targets:
+        label = _mpp_label(target_mpp)
+        subset = slide_df[slide_df["bucket_label"] == label]
+        out_path = tiling_manifest_dir / f"tiling_manifest_{label}.csv"
+        if not subset.empty:
+            subset[["slide_id", "slide_path"]].to_csv(out_path, index=False)
+        else:
+            with out_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["slide_id", "slide_path"])
+                writer.writeheader()
+        bucket_tiling_manifests[label] = out_path
 
     # Versioned split manifest lives alongside training outputs (matches manuscript layout).
     split_manifest_dir = target_dir / "versioned_split_manifest"
@@ -1593,74 +1750,52 @@ def main() -> int:
 
     print(f"[tcga] Versioned split manifest: {split_manifest}")
 
-    # Stage 1: tiling
-    base_tiles_dir = _mpp_tiles_dir(run_dir, args.target_mpp)
-    tiling_args = [
-        "tiling",
-        str(split_manifest),
-        "--output",
-        str(output_root),
-        "--run-name",
-        str(args.run_name),
-        "--tile-size",
-        str(int(args.tile_size)),
-        "--stride",
-        str(int(args.stride)),
-        "--target-mpp",
-        str(float(args.target_mpp)),
-        "--tiles-dir",
-        str(base_tiles_dir),
-    ]
-    if int(args.limit_tiles) > 0:
-        tiling_args.extend(["--limit-tiles", str(int(args.limit_tiles))])
-    _run_goldmark(tiling_args)
-    tile_dir = base_tiles_dir
-    _ensure_alias_dir(run_dir / "tiling" / "tiles", tile_dir, label="tiling")
-    _write_case_tile_manifests(tile_dir, slide_manifest, resume=bool(args.resume))
-    _write_tile_coords(
-        tile_dir,
-        _tile_coords_path(run_dir, args.target_mpp),
-        slide_index,
-        project_id=str(args.project_id),
-        resume=bool(args.resume),
+    bucket_split_manifests = _write_bucketed_split_manifests(
+        split_manifest,
+        slide_df,
+        run_dir,
+        mpp_targets,
     )
 
-    extra_target_mpp = _parse_extra_target_mpp(args.extra_target_mpp)
-    for extra_mpp in extra_target_mpp:
-        if abs(float(extra_mpp) - float(args.target_mpp)) < 1e-6:
+    # Stage 1: tiling (bucketed by native MPP)
+    for target_mpp in mpp_targets:
+        label = _mpp_label(target_mpp)
+        tiles_dir = _mpp_tiles_dir(run_dir, target_mpp)
+        if not _manifest_has_rows(bucket_tiling_manifests[label]) and not _tile_manifests_present(tiles_dir):
+            print(f"[tiling] No slides assigned to {label}; skipping tiling.")
             continue
-        extra_tiles_dir = _mpp_tiles_dir(run_dir, extra_mpp)
-        extra_manifest_dir = extra_tiles_dir / "manifests"
-        if args.resume and extra_manifest_dir.exists() and any(extra_manifest_dir.glob("*_tiles.csv")):
-            print(f"[resume] Extra tiling already present: {extra_tiles_dir}")
-            continue
-        _run_goldmark(
-            [
+        manifest_dir = tiles_dir / "manifests"
+        if args.resume and manifest_dir.exists() and any(manifest_dir.glob("*_tiles.csv")):
+            print(f"[resume] Tiling already present: {tiles_dir}")
+        else:
+            tile_size = _scale_tile_size(args.tile_size, base_mpp, target_mpp)
+            stride = _scale_tile_size(args.stride, base_mpp, target_mpp)
+            tiling_args = [
                 "tiling",
-                str(split_manifest),
+                str(bucket_tiling_manifests[label]),
                 "--output",
                 str(output_root),
                 "--run-name",
                 str(args.run_name),
                 "--tile-size",
-                str(int(args.tile_size)),
+                str(int(tile_size)),
                 "--stride",
-                str(int(args.stride)),
+                str(int(stride)),
                 "--target-mpp",
-                str(float(extra_mpp)),
+                str(float(target_mpp)),
                 "--tiles-dir",
-                str(extra_tiles_dir),
-                *(
-                    ["--limit-tiles", str(int(args.limit_tiles))]
-                    if int(args.limit_tiles) > 0
-                    else []
-                ),
+                str(tiles_dir),
             ]
-        )
-        _write_case_tile_manifests(extra_tiles_dir, slide_manifest, resume=bool(args.resume))
+            if int(args.limit_tiles) > 0:
+                tiling_args.extend(["--limit-tiles", str(int(args.limit_tiles))])
+            _run_goldmark(tiling_args)
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        if abs(float(target_mpp) - float(base_mpp)) < 1e-6:
+            _ensure_alias_dir(run_dir / "tiling" / "tiles", tiles_dir, label="tiling")
+        _write_case_tile_manifests(tiles_dir, slide_manifest, resume=bool(args.resume))
         _write_tile_coords(
-            extra_tiles_dir,
-            _tile_coords_path(run_dir, extra_mpp),
+            tiles_dir,
+            _tile_coords_path(run_dir, target_mpp),
             slide_index,
             project_id=str(args.project_id),
             resume=bool(args.resume),
@@ -1668,51 +1803,31 @@ def main() -> int:
 
     # Stage 2: features
     feature_scope = "missing" if args.resume and not args.rebuild else "all"
-    _run_goldmark(
-        [
-            "features",
-            str(split_manifest),
-            "--tile-manifests",
-            str(tile_dir),
-            "--output",
-            str(output_root),
-            "--run-name",
-            str(args.run_name),
-            "--encoder",
-            str(args.encoder),
-            "--device",
-            str(args.device),
-            "--batch-size",
-            "32",
-            "--num-workers",
-            "4",
-            "--tile-size",
-            str(int(args.tile_size)),
-            "--scope",
-            feature_scope,
-        ]
-    )
-    feature_dir = run_dir / "features" / str(args.encoder)
-
-    for extra_mpp in extra_target_mpp:
-        if abs(float(extra_mpp) - float(args.target_mpp)) < 1e-6:
+    for target_mpp in mpp_targets:
+        label = _mpp_label(target_mpp)
+        split_manifest_path = bucket_split_manifests.get(label)
+        if not split_manifest_path or not split_manifest_path.exists():
             continue
-        extra_tiles_dir = _mpp_tiles_dir(run_dir, extra_mpp)
-        extra_suffix = f"_{_mpp_label(extra_mpp)}"
+        if not _manifest_has_rows(split_manifest_path):
+            print(f"[features] No slides assigned to {label}; skipping feature extraction.")
+            continue
+        tile_size = _scale_tile_size(args.tile_size, base_mpp, target_mpp)
+        tiles_dir = _mpp_tiles_dir(run_dir, target_mpp)
+        if not _tile_manifests_present(tiles_dir):
+            print(f"[features] No tile manifests present in {tiles_dir}; skipping {label}.")
+            continue
         _run_goldmark(
             [
                 "features",
-                str(split_manifest),
+                str(split_manifest_path),
                 "--tile-manifests",
-                str(extra_tiles_dir),
+                str(tiles_dir),
                 "--output",
                 str(output_root),
                 "--run-name",
                 str(args.run_name),
                 "--encoder",
                 str(args.encoder),
-                "--feature-name-suffix",
-                extra_suffix,
                 "--device",
                 str(args.device),
                 "--batch-size",
@@ -1720,11 +1835,12 @@ def main() -> int:
                 "--num-workers",
                 "4",
                 "--tile-size",
-                str(int(args.tile_size)),
+                str(int(tile_size)),
                 "--scope",
                 feature_scope,
             ]
         )
+    feature_dir = run_dir / "features" / str(args.encoder)
 
     # Stage 3: 5-split cross-validation training
     _run_goldmark(

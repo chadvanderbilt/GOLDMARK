@@ -50,6 +50,91 @@ def _is_icml_encoder(name: Optional[str]) -> bool:
     return any(slug.startswith(prefix) for prefix in ICML_ENCODER_PREFIXES)
 
 
+def _normalize_image_size(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        if len(value) == 1:
+            return int(value[0])
+        if len(value) == 2 and value[0] == value[1]:
+            return int(value[0])
+        if len(value) == 3 and value[1] == value[2]:
+            return int(value[1])
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _transform_targets_size(transform: object, expected: int) -> bool:
+    if transform is None:
+        return False
+    queue = [transform]
+    while queue:
+        current = queue.pop(0)
+        if current is None:
+            continue
+        if hasattr(current, "transforms"):
+            queue.extend(list(getattr(current, "transforms")))
+            continue
+        size = getattr(current, "size", None)
+        normalized = _normalize_image_size(size)
+        if normalized is not None and int(normalized) == int(expected):
+            return True
+    return False
+
+
+def _extract_transform_size(transform: object) -> Optional[int]:
+    if transform is None:
+        return None
+    queue = [transform]
+    while queue:
+        current = queue.pop(0)
+        if current is None:
+            continue
+        if hasattr(current, "transforms"):
+            queue.extend(list(getattr(current, "transforms")))
+            continue
+        size = _normalize_image_size(getattr(current, "size", None))
+        if size:
+            return size
+    return None
+
+
+def _infer_model_input_size(model: nn.Module) -> Optional[int]:
+    for attr in ("img_size", "image_size", "input_size"):
+        size = _normalize_image_size(getattr(model, attr, None))
+        if size:
+            return size
+    cfg = getattr(model, "pretrained_cfg", None) or getattr(model, "cfg", None) or getattr(model, "config", None)
+    if isinstance(cfg, dict):
+        size = _normalize_image_size(cfg.get("input_size") or cfg.get("image_size"))
+        if size:
+            return size
+    return None
+
+
+def _infer_expected_input_size(model: nn.Module, transform: object) -> Optional[int]:
+    size = _extract_transform_size(transform)
+    if size:
+        return size
+    for attr in ("input_size", "image_size", "img_size"):
+        size = _normalize_image_size(getattr(transform, attr, None))
+        if size:
+            return size
+    for attr in ("preprocess", "base_transform"):
+        nested = getattr(transform, attr, None)
+        if nested is not None:
+            size = _normalize_image_size(getattr(nested, "size", None))
+            if size:
+                return size
+    size = _infer_model_input_size(model)
+    return size
+
+
 @dataclass
 class EncoderConfig:
     name: str = "prov-gigapath"
@@ -222,6 +307,20 @@ class FeatureExtractor:
             except Exception:
                 pass
         self.model, self.transform, self.feature_dim = self._load_model()
+        inferred_size = _infer_expected_input_size(self.model, self.transform)
+        self._expected_input_size = int(inferred_size) if inferred_size else 224
+        if not _transform_targets_size(self.transform, int(self._expected_input_size)):
+            self.logger.warning(
+                "Transform does not resize to %s; prepending resize for encoder %s.",
+                self._expected_input_size,
+                config.name,
+            )
+            self.transform = T.Compose(
+                [
+                    T.Resize((int(self._expected_input_size), int(self._expected_input_size))),
+                    self.transform,
+                ]
+            )
         self._checkpoint_path = self._resolve_checkpoint_path()
         self.logger.info("Loaded encoder %s (feature_dim=%d)", config.name, self.feature_dim)
 
@@ -533,6 +632,14 @@ class FeatureExtractor:
 
     # ------------------------------------------------------------------
     def _encode_batch(self, batch: torch.Tensor) -> torch.Tensor:
+        expected = getattr(self, "_expected_input_size", None)
+        if expected and (batch.shape[-2] != int(expected) or batch.shape[-1] != int(expected)):
+            batch = torch.nn.functional.interpolate(
+                batch,
+                size=(int(expected), int(expected)),
+                mode="bilinear",
+                align_corners=False,
+            )
         variant = str(getattr(self.config, "feature_variant", "cls_post") or "cls_post").lower()
         if variant not in ("cls_post", "cls_pre"):
             raise ValueError(f"Unsupported feature_variant '{variant}'. Expected 'cls_post' or 'cls_pre'.")

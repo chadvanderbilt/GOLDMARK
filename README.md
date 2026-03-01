@@ -41,6 +41,7 @@ cp configs/secrets.env.example configs/secrets.env
 # Option A (recommended on HPC): conda
 source /home/vanderbc/.bashrc
 bash scripts/setup_conda_goldmark_env.sh
+conda activate goldmark
 
 # Option B (sudo/venv): installs system deps + creates venv
 bash scripts/setup_goldmark_sudo.sh
@@ -89,6 +90,87 @@ python scripts/tcga_cv_to_external_full_run.py \
 
 For GitHub users, we provide **generic** launchers that accept options via environment variables.
 These are not hard-coded to a specific project or gene.
+
+Make sure the `goldmark` conda environment is active (or set `CONDA_ENV=goldmark` before running the scripts).
+
+### Canonical pathology foundation model encoders
+
+Each encoder below reflects the implementation in `goldmark/features/canonical_sources.py`, which follows the
+recommended preprocessing from the original model repositories. Access typically requires a Hugging Face token.
+
+<details>
+<summary><strong>prov-gigapath</strong></summary>
+
+**Access**
+- Hugging Face: `prov-gigapath/prov-gigapath` (may require access approval)
+- Set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or login via `huggingface-cli login`.
+
+**Implementation**
+- Loader: `timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)`
+- Transform: resize 256 → center crop 224 → normalize ImageNet
+- Feature dim: 1536
+</details>
+
+<details>
+<summary><strong>EAGLE</strong></summary>
+
+**Access**
+- Internal model (not public). Requires access to the EAGLE weights + repo.
+
+**Implementation**
+- Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
+  internal EAGLE implementation.
+- Transform: follow the EAGLE repo’s preprocessing exactly (see internal docs).
+- Feature dim: defined by the EAGLE encoder (see internal docs).
+</details>
+
+<details>
+<summary><strong>UNI</strong></summary>
+
+**Access**
+- Local checkpoint required: `MIL_UNI_CHECKPOINT` or `weights/uni_checkpoint.pth`
+
+**Implementation**
+- Loader: `timm.create_model("vit_large_patch16_224", ...)` + load checkpoint
+- Transform: resize 224 → normalize ImageNet
+- Feature dim: 1024
+</details>
+
+<details>
+<summary><strong>Virchow</strong></summary>
+
+**Access**
+- Hugging Face: `paige-ai/Virchow` (may require access approval)
+
+**Implementation**
+- Loader: `timm.create_model("hf-hub:paige-ai/Virchow", ...)` with `SwiGLUPacked` + `SiLU`
+- Transform: `timm.create_transform` from model config
+- Feature dim: 2560 (class token + pooled patch tokens)
+</details>
+
+<details>
+<summary><strong>Virchow2</strong></summary>
+
+**Access**
+- Hugging Face: `paige-ai/Virchow2` (may require access approval)
+
+**Implementation**
+- Loader: `timm.create_model("hf-hub:paige-ai/Virchow2", ...)` with `SwiGLUPacked` + `SiLU`
+- Transform: `timm.create_transform` from model config
+- Feature dim: 2560 (class token + pooled patch tokens)
+</details>
+
+<details>
+<summary><strong>h-optimus-0</strong></summary>
+
+**Access**
+- Hugging Face: `bioptimus/H-optimus-0` (gated; requires explicit approval)
+
+**Implementation**
+- Loader: `timm.create_model("hf-hub:bioptimus/H-optimus-0", pretrained=True)`
+- Transform: resize 224 → normalize Bioptimus mean/std
+- Feature dim: 1536
+</details>
 
 <details>
 <summary><strong>SLURM (GPU example)</strong> — <code>examples/slurm/submit_tcga_cv_to_external.sh</code></summary>
@@ -158,6 +240,15 @@ Notes for SLURM users:
 </details>
 
 External inference only runs if `EXTERNAL_MANIFEST` (and optionally `EXTERNAL_ROOT`) are set.
+
+Minimum required columns in `EXTERNAL_MANIFEST`:
+- Label column: one of `<GENE>` (e.g., `EGFR`), `label_index`, `label`, or `target`
+- Slide ID column: one of `slide_id`, `DMP_ASSAY_ID`, `sample_id`, `case_id`, or `slide`
+
+Optional columns:
+- `feature_path` (absolute/relative path to features per slide; overrides `EXTERNAL_ROOT`)
+- `OncoTree_Code` (used to resolve features under `EXTERNAL_ROOT`)
+- `scanned_slides_exist` (rows with 0/false are skipped)
 
 <details>
 <summary><strong>nohup (interactive node)</strong> — <code>scripts/nohup_tcga_cv_to_external.sh</code></summary>
@@ -295,7 +386,7 @@ bash examples/run_tcga_luad_egfr_end_to_end.sh
 - `ENCODER` (default: `h-optimus-0`)
 - `DEVICE` (default: `cuda`)
 - `TARGET_MPP` (default: `0.5`)
-- `EXTRA_TARGET_MPP` (default: `0.25`; comma-separated for additional MPPs)
+- `EXTRA_TARGET_MPP` (default: `0.25`; comma-separated MPP buckets — each slide is assigned to the nearest bucket)
 - `RUN_NAME` (default: `${PROJECT_ID}`)
 - `RUN_MODE` in `{force|resume|rebuild}` (default: `force`)
 - `PER_CLASS`, `EXTERNAL_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`
@@ -322,14 +413,15 @@ All outputs land under `runs/<project-id>/` (the default `RUN_NAME` is the proje
 - `runs/<project-id>/tiling/tile_coords_20x.csv` — aggregated tile coords (x,y,slide,sample_id,target)
 - `runs/<project-id>/tiling/tiling_manifest.csv` — slide inventory (file_name,sample_id,target,slide_path)
 
-When `EXTRA_TARGET_MPP` is set, the additional tiling pass writes to:
-- `runs/<project-id>/tiling/tiles_40x/manifests/<slide_id>_tiles.csv` (for `EXTRA_TARGET_MPP=0.25`)
-- `runs/<project-id>/tiling/tiles_40x/cases/<case_id>_tiles.csv`
-- `runs/<project-id>/tiling/tile_coords_40x.csv` (for `EXTRA_TARGET_MPP=0.25`)
-- `runs/<project-id>/tiling/tiles_mpp_<value>/...` for any other MPP
+When `EXTRA_TARGET_MPP` is set (e.g., `0.25`), slides are **bucketed by native MPP**:
+- `runs/<project-id>/tiling/tiles_20x/...` for slides closer to `0.5`
+- `runs/<project-id>/tiling/tiles_40x/...` for slides closer to `0.25`
+- `runs/<project-id>/tiling/tile_coords_20x.csv` and `tile_coords_40x.csv` each contain **only** the slides assigned to that bucket
+
+Tiles keep the **same physical size** across buckets by scaling pixel size (e.g., 224px at 0.5 mpp ⇔ 448px at 0.25 mpp).
 
 **C) Features + QC**
-- `runs/<project-id>/features/<encoder>/features_<slide_id>.pt` — per-slide **20x** feature tensor (N tiles × D)
+- `runs/<project-id>/features/<encoder>/features_<slide_id>.pt` — per-slide feature tensor (N tiles × D; tile size set by the slide’s MPP bucket)
 - `runs/<project-id>/features/<encoder>/features_<slide_id>.json` — QC metadata + checksums (schema below)
 - If feature extraction fails QC, tensors are renamed:
   - `features_<slide_id>.FAILED_tile_count_mismatch.pt`
@@ -343,11 +435,9 @@ CPU data loader workers to keep the GPU fed. You can override both via `--batch-
 As a rule of thumb, start with `--num-workers 4` and increase to 8–16 on beefy GPU nodes if CPU
 tile decoding becomes the bottleneck.
 
-When `EXTRA_TARGET_MPP` is set, the additional feature pass writes **into the same encoder directory**
-using a filename suffix:
-- `runs/<project-id>/features/<encoder>/features_<slide_id>_40x.pt` (for `EXTRA_TARGET_MPP=0.25`)
-- `runs/<project-id>/features/<encoder>/features_<slide_id>_40x.json`
-- `features_<slide_id>_mpp_<value>.*` for any other MPP
+When `EXTRA_TARGET_MPP` is set, **features are still written once per slide** (no suffix).
+Slides assigned to 40x are extracted with the larger pixel tile size, but the output path remains:
+- `runs/<project-id>/features/<encoder>/features_<slide_id>.pt`
 
 **D) Training (5-fold CV)**
 - `runs/<project-id>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — shared split manifest used for all encoders (schema below)
@@ -407,7 +497,7 @@ Additional epochs (e.g., final epoch) appear under:
 - `embedding_stats` (degenerate/variance checks)
 - `feature_sha256`, `feature_bytes`
 - `status` in `{ok,failed}` and `failure_reason` when failed
-For extra MPPs, the same schema is written with a suffix (e.g., `features_<slide_id>_40x.json`).
+Metadata is written once per slide (no suffix), regardless of its MPP bucket.
 
 **CV summary** (`training/checkpoints/<GENE>/classification_report/cv_summary.csv`)
 - `split` (e.g. `split_1_set`)
