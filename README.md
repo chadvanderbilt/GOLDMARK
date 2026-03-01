@@ -232,14 +232,67 @@ tail -f runs/<run-name>/logs/nohup.out
 ```
 </details>
 
-**End-to-end example (foreground)** — `examples/run_tcga_luad_egfr_end_to_end.sh`
+<details>
+<summary><strong>End-to-end example (foreground)</strong> — <code>examples/run_tcga_luad_egfr_end_to_end.sh</code></summary>
 
 ```bash
-RUN_MODE=force \
-TARGET_MPP=0.5 \
-EXTRA_TARGET_MPP=0.25 \
+# Example: minimal force (20x+40x, no external)
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=force
+export PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=0.25
 bash examples/run_tcga_luad_egfr_end_to_end.sh
 ```
+
+<strong>20x only (no external)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=force
+export PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=
+bash examples/run_tcga_luad_egfr_end_to_end.sh
+```
+
+<strong>40x only (no external)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=force
+export PER_CLASS=0
+export TARGET_MPP=0.25
+export EXTRA_TARGET_MPP=
+bash examples/run_tcga_luad_egfr_end_to_end.sh
+```
+
+<strong>External inference (20x+40x)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=force
+export PER_CLASS=0
+export EXTERNAL_PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=0.25
+export EXTERNAL_MANIFEST=/path/to/external_manifest.csv
+export EXTERNAL_ROOT=/path/to/foundation_model_training_images/EXTERNAL
+bash examples/run_tcga_luad_egfr_end_to_end.sh
+```
+</details>
 
 **Options (env vars)**
 - `PROJECT_ID` (default: `TCGA-LUAD`)
@@ -309,13 +362,15 @@ Note: the training stage also writes probability exports under the same director
 
 **F) External inference (external LUAD)**
 
-External inference is executed **once** using the **best split** checkpoint and written under that split:
-- `runs/<project-id>/training/checkpoints/<GENE>/<best_split>/external_inference/external/inference_results.csv`
-- `runs/<project-id>/training/checkpoints/<GENE>/<best_split>/external_inference/external/attention/<slide_id>_attention.csv`
-- `runs/<project-id>/training/checkpoints/<GENE>/<best_split>/external_inference/external/plots/roc_pr_curves.png`
+External inference runs **for each split** using the **best AUC epoch** from CV plus any configured epochs
+(e.g., the final epoch), and evaluates **every slide** in the external cohort.
+Results are written under each split:
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/external_inference/external/ckpt_best_<epoch>/inference_results.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/external_inference/external/ckpt_best_<epoch>/attention/<slide_id>_attention.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/external_inference/external/ckpt_best_<epoch>/plots/roc_pr_curves.png`
 
-For convenience, each non-best split directory contains an `external_inference/external` entry that links to (or points at)
-the best-split external inference results.
+Additional epochs (e.g., final epoch) appear under:
+- `.../external_inference/external/ckpt_<epoch>/...`
 
 #### File schemas (column names)
 
