@@ -236,7 +236,6 @@ class InferenceRunner:
                 tile_with_attention["attention"] = np.nan
                 if usable > 0:
                     tile_with_attention.loc[: usable - 1, "attention"] = weights[:usable]
-                tile_with_attention["probability"] = float(probability)
                 tile_with_attention.to_csv(
                     out_dir / f"{slide_id}_tiles_with_attention.csv", index=False
                 )
@@ -251,7 +250,6 @@ class InferenceRunner:
                             "y": row.get("y"),
                             "level": row.get("level"),
                             "attention": float(weights[idx]),
-                            "probability": float(probability),
                         }
                     )
 
@@ -262,7 +260,6 @@ class InferenceRunner:
                         "slide_id": slide_id,
                         "tile_index": idx,
                         "attention": float(weight),
-                        "probability": float(probability),
                     }
                 )
 

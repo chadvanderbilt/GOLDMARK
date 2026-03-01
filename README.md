@@ -40,9 +40,7 @@ cp configs/secrets.env.example configs/secrets.env
 
 # Option A (recommended on HPC): conda
 source /home/vanderbc/.bashrc
-conda env create -f environment.yml
-conda activate goldmark
-python -m pip install -r requirements.txt -r requirements-wsi.txt -r requirements-encoders.txt
+bash scripts/setup_conda_goldmark_env.sh
 
 # Option B: venv (requires Python 3.10+ and native OpenSlide installed on your system)
 # python3 -m venv .venv
@@ -398,7 +396,7 @@ Additional epochs (e.g., final epoch) appear under:
 - `tile_path` (optional; blank when only coordinates are generated)
 
 **Tile manifest with attention** (`.../attention/<slide_id>_tiles_with_attention.csv`)
-- Same columns as the tile manifest, plus `attention` and `probability` for that slide.
+- Same columns as the tile manifest, plus `attention` for that slide.
 
 **Feature metadata JSON** (`features/<encoder>/features_<slide_id>.json`)
 - `slide_id`, `encoder`
