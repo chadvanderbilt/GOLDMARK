@@ -193,9 +193,17 @@ def _ensure_alias_dir(alias: Path, target: Path, *, label: str) -> None:
         (alias / "LOCATION.txt").write_text(f"{label} -> {target}\n")
 
 
-def _ensure_target_checkpoint_root(base_root: Path, target_root: Path) -> Path:
+def _ensure_target_checkpoint_root(
+    base_root: Path, target_root: Path, encoder_name: Optional[str] = None
+) -> Path:
     base_root.mkdir(parents=True, exist_ok=True)
     target_root.mkdir(parents=True, exist_ok=True)
+    encoder_root = target_root
+    if encoder_name:
+        safe_encoder = re.sub(r"[^0-9A-Za-z._-]+", "_", str(encoder_name)).strip("_-.")
+        if safe_encoder:
+            encoder_root = target_root / safe_encoder
+            encoder_root.mkdir(parents=True, exist_ok=True)
     move_candidates: List[Path] = []
     if base_root.exists():
         for entry in base_root.iterdir():
@@ -207,11 +215,11 @@ def _ensure_target_checkpoint_root(base_root: Path, target_root: Path) -> Path:
                 move_candidates.append(entry)
     if move_candidates:
         for entry in move_candidates:
-            dest = target_root / entry.name
+            dest = encoder_root / entry.name
             if dest.exists():
                 continue
             shutil.move(str(entry), str(dest))
-    return target_root
+    return encoder_root
 
 
 def _download_is_complete(file_id: str, filename: str, size: int, download_root: Path) -> bool:
@@ -245,6 +253,21 @@ def _md5_matches(path: Path, expected_md5: Optional[str]) -> bool:
         print(f"[gdc] MD5 mismatch for {path.name}: expected={expected} got={digest}")
         return False
     return True
+
+
+def _find_last_epoch_checkpoint(checkpoint_dir: Path) -> Optional[int]:
+    if not checkpoint_dir.exists():
+        return None
+    epoch_candidates: List[int] = []
+    for suffix in ("pt", "pth"):
+        for path in checkpoint_dir.glob(f"checkpoint_epoch_*.{suffix}"):
+            match = re.search(r"checkpoint_epoch_(\d+)\." + re.escape(suffix), path.name)
+            if match:
+                try:
+                    epoch_candidates.append(int(match.group(1)))
+                except ValueError:
+                    continue
+    return max(epoch_candidates) if epoch_candidates else None
 
 
 def _download_is_complete_with_md5(
@@ -1738,15 +1761,34 @@ def main() -> int:
             *split_columns,
         ]
     )
-    target_checkpoints_root = _ensure_target_checkpoint_root(checkpoints_root, target_dir)
+    target_checkpoints_root = _ensure_target_checkpoint_root(
+        checkpoints_root, target_dir, encoder_name=str(args.encoder)
+    )
     _ensure_alias_dir(run_dir / "checkpoints", run_dir / "training" / "checkpoints", label="checkpoints")
+
+    import pandas as pd
 
     cv_summary = target_checkpoints_root / "classification_report" / "cv_summary.csv"
     if not cv_summary.exists():
         raise FileNotFoundError(f"Expected CV summary not found: {cv_summary}")
 
+    best_epochs: Dict[str, int] = {}
+    try:
+        cv_df = pd.read_csv(cv_summary)
+        for _, row in cv_df.iterrows():
+            split = str(row.get("split") or "").strip()
+            if not split:
+                continue
+            try:
+                best_epoch_val = int(row.get("best_epoch"))
+            except (TypeError, ValueError):
+                continue
+            if best_epoch_val > 0:
+                best_epochs[split] = best_epoch_val
+    except Exception:
+        best_epochs = {}
+
     # Stage 4: per-split held-out test inference (attention + plots)
-    import pandas as pd
 
     manifest_df = pd.read_csv(split_manifest)
     for split_col in split_columns:
@@ -1776,15 +1818,9 @@ def main() -> int:
                 title=f"{args.project_id} · {gene_upper} · {args.encoder} · {split_col} test",
             )
 
-    # Stage 5: external inference using best split checkpoint.
-    best_split = _pick_best_split(cv_summary)
-    best_ckpt = target_checkpoints_root / best_split / "checkpoint" / "checkpoint_best.pt"
-    if not best_ckpt.exists():
-        raise FileNotFoundError(f"Best checkpoint not found: {best_ckpt}")
-
+    # Stage 5: external inference per split (best AUC epoch + final epoch).
     external_manifest_raw = str(args.external_manifest or "").strip()
-    external_results = None
-    external_dir = target_checkpoints_root / best_split / "external_inference" / "external"
+    external_results: List[Path] = []
     if external_manifest_raw:
         external_manifest_path = Path(external_manifest_raw).expanduser().resolve()
         external_root = Path(str(args.external_root)).expanduser().resolve() if args.external_root else None
@@ -1798,81 +1834,64 @@ def main() -> int:
         external_out_manifest = target_manifest_dir / f"external_manifest_{gene_upper}_{args.encoder}.csv"
         pd.DataFrame(external_rows).to_csv(external_out_manifest, index=False)
         print(f"[external] External manifest: {external_out_manifest} (rows={len(external_rows)})")
-
-        external_dir.mkdir(parents=True, exist_ok=True)
-        runner = InferenceRunner(
-            manifest=pd.read_csv(external_out_manifest),
-            feature_dir=external_feature_dir,
-            checkpoint_path=best_ckpt,
-            output_dir=external_dir,
-            target_column="label_index",
-            config=InferenceConfig(
-                split_column="",
-                split_value="external",
-                generate_overlays=bool(args.with_overlays),
-                export_attention=True,
-            ),
-        )
-        external_results = runner.run()
-        if not args.no_plots:
-            _maybe_write_roc_pr_plots(
-                external_results,
-                external_dir / "plots",
-                title=f"External cohort · {gene_upper} · {args.encoder} · best={best_split}",
-            )
+        for split_col in split_columns:
+            split_dir = target_checkpoints_root / split_col
+            ckpt_dir = split_dir / "checkpoint"
+            best_epoch = best_epochs.get(split_col)
+            final_epoch = _find_last_epoch_checkpoint(ckpt_dir)
+            epochs_to_run: List[Tuple[str, int]] = []
+            if best_epoch:
+                epochs_to_run.append(("best", best_epoch))
+            if final_epoch and final_epoch != best_epoch:
+                epochs_to_run.append(("final", final_epoch))
+            if not epochs_to_run:
+                print(f"[external] No checkpoints found for {split_col}; skipping", flush=True)
+                continue
+            for label, epoch in epochs_to_run:
+                if label == "best":
+                    ckpt_path = ckpt_dir / "checkpoint_best.pt"
+                    if not ckpt_path.exists():
+                        ckpt_path = ckpt_dir / f"checkpoint_epoch_{epoch:03d}.pt"
+                else:
+                    ckpt_path = ckpt_dir / f"checkpoint_epoch_{epoch:03d}.pt"
+                if not ckpt_path.exists():
+                    ckpt_path = ckpt_dir / f"checkpoint_epoch_{epoch:03d}.pth"
+                if not ckpt_path.exists():
+                    print(f"[external] Missing checkpoint for {split_col} epoch {epoch}; skipping", flush=True)
+                    continue
+                suffix = f"ckpt_best_{epoch:03d}" if label == "best" else f"ckpt_{epoch:03d}"
+                external_dir = split_dir / "external_inference" / "external" / suffix
+                external_dir.mkdir(parents=True, exist_ok=True)
+                runner = InferenceRunner(
+                    manifest=pd.read_csv(external_out_manifest),
+                    feature_dir=external_feature_dir,
+                    checkpoint_path=ckpt_path,
+                    output_dir=external_dir,
+                    target_column="label_index",
+                    config=InferenceConfig(
+                        split_column="",
+                        split_value="external",
+                        generate_overlays=bool(args.with_overlays),
+                        export_attention=True,
+                    ),
+                )
+                result_path = runner.run()
+                external_results.append(result_path)
+                if not args.no_plots:
+                    _maybe_write_roc_pr_plots(
+                        result_path,
+                        external_dir / "plots",
+                        title=f"External cohort · {gene_upper} · {args.encoder} · {split_col} · {suffix}",
+                    )
     else:
         print("[external] Skipping external inference (no --external-manifest provided).")
-
-    # Convenience: ensure each split directory has an `external_inference/external` entry so that split
-    # context is discoverable in one place. Prefer symlinks; fall back to a pointer file when symlinks
-    # are not supported.
-    if external_results is not None:
-        for split_col in split_columns:
-            split_external_root = target_checkpoints_root / split_col / "external_inference"
-            link_path = split_external_root / "external"
-            if split_col == best_split:
-                continue
-            try:
-                split_external_root.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                continue
-            if link_path.exists() or link_path.is_symlink():
-                try:
-                    if link_path.is_dir() and not link_path.is_symlink():
-                        shutil.rmtree(link_path)
-                    else:
-                        link_path.unlink()
-                except OSError:
-                    pass
-            try:
-                rel_target = os.path.relpath(external_dir, start=link_path.parent)
-                os.symlink(rel_target, link_path)
-            except OSError:
-                try:
-                    link_path.mkdir(parents=True, exist_ok=True)
-                    (link_path / "LOCATION.txt").write_text(
-                        "\n".join(
-                            [
-                                "External inference was run once using the best-performing split checkpoint.",
-                                f"best_split: {best_split}",
-                                f"checkpoint: {best_ckpt}",
-                                f"results_dir: {external_dir}",
-                                f"results_csv: {external_results}",
-                                "",
-                            ]
-                        )
-                    )
-                except OSError:
-                    pass
 
     print("\nTCGA CV → external cohort full run complete.")
     print(f"- Run dir: {run_dir}")
     print(f"- Split manifest: {split_manifest}")
     print(f"- CV summary: {cv_summary}")
-    print(f"- Best split: {best_split}")
-    print(f"- Best checkpoint: {best_ckpt}")
-    if external_results is not None:
-        print(f"- External inference results: {external_results}")
+    if external_results:
+        print(f"- External inference results: {len(external_results)} runs")
     return 0
 
 

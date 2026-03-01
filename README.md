@@ -347,16 +347,16 @@ using a filename suffix:
 - `features_<slide_id>_mpp_<value>.*` for any other MPP
 
 **D) Training (5-fold CV)**
-- `runs/<project-id>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — the split manifest used for tiling/features/training (schema below)
-- `runs/<project-id>/training/checkpoints/<GENE>/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
+- `runs/<project-id>/training/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv` — shared split manifest used for all encoders (schema below)
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/classification_report/cv_summary.csv` — per-split best epoch + metrics (schema below)
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/checkpoint/checkpoint_best.pt` — best checkpoint for that split (and similarly for split_2_set..split_5_set)
 
 **E) Per-split held-out test inference (attention export + ROC/PR plots)**
 
 Written under each split so split context is self-contained:
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/inference/test/inference_results.csv`
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/inference/test/attention/<slide_id>_attention.csv`
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/inference/test/plots/roc_pr_curves.png`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/inference/test/inference_results.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/inference/test/attention/<slide_id>_attention.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/inference/test/plots/roc_pr_curves.png`
 
 Note: the training stage also writes probability exports under the same directory (e.g. `probabilities_test_set.csv`).
 
@@ -365,9 +365,9 @@ Note: the training stage also writes probability exports under the same director
 External inference runs **for each split** using the **best AUC epoch** from CV plus any configured epochs
 (e.g., the final epoch), and evaluates **every slide** in the external cohort.
 Results are written under each split:
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/external_inference/external/ckpt_best_<epoch>/inference_results.csv`
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/external_inference/external/ckpt_best_<epoch>/attention/<slide_id>_attention.csv`
-- `runs/<project-id>/training/checkpoints/<GENE>/split_1_set/external_inference/external/ckpt_best_<epoch>/plots/roc_pr_curves.png`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/external_inference/external/ckpt_best_<epoch>/inference_results.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/external_inference/external/ckpt_best_<epoch>/attention/<slide_id>_attention.csv`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/external_inference/external/ckpt_best_<epoch>/plots/roc_pr_curves.png`
 
 Additional epochs (e.g., final epoch) appear under:
 - `.../external_inference/external/ckpt_<epoch>/...`
