@@ -115,7 +115,7 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>EAGLE</strong></summary>
 
 **Access**
-- Internal model (not public). Requires access to the EAGLE weights + repo.
+- Hugging Face: `MCCPBR/EAGLE` (public)
 
 **Implementation**
 - Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
