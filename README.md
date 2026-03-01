@@ -45,8 +45,7 @@ bash scripts/setup_conda_goldmark_env.sh
 # Option B: venv (requires Python 3.10+ and native OpenSlide installed on your system)
 # python3 -m venv .venv
 # source .venv/bin/activate
-
-python -m pip install -r requirements.txt -r requirements-wsi.txt
+# python -m pip install -r requirements.txt -r requirements-wsi.txt -r requirements-encoders.txt
 
 # Installs gdc-client into bin/ (ignored by git)
 python scripts/install_gdc_client.py --dest bin/gdc-client
@@ -461,23 +460,15 @@ Docs:
 
 ## Installation
 
-This repo targets **Python 3.10+**.
+Preferred (conda):
 
 ```bash
-python -m pip install -r requirements.txt
+source /home/vanderbc/.bashrc
+bash scripts/setup_conda_goldmark_env.sh
 ```
 
-Notes:
-- For **whole-slide image (WSI)** tiling and attention overlays, install the optional dependencies:
-  ```bash
-  python -m pip install -r requirements-wsi.txt
-  ```
-  `openslide-python` also requires the native OpenSlide library (platform-specific).
-- For **canonical foundation-model encoders** (timm / transformers / HF hub), install:
-  ```bash
-  python -m pip install -r requirements-encoders.txt
-  ```
-  Some encoders download weights and/or require gated access; for offline runs, pre-cache weights or use `--custom-encoder`.
+If you cannot use conda, create a venv and install requirements:
+`requirements.txt`, `requirements-wsi.txt`, `requirements-encoders.txt`.
 
 ## Quickstart (typical flow)
 
