@@ -71,8 +71,8 @@ Finally, join SVS paths to those patient labels:
 ```bash
 python targets/tcga/build_slide_manifest_from_svs_and_mutations.py \
   --svs-root data/gdc_download \
-  --labels data/targets/PTEN_patient_labels.csv \
-  --output data/manifests/TCGA_PTEN_slide_manifest.csv
+  --labels data/targets/<GENE>_patient_labels.csv \
+  --output data/manifests/TCGA_<GENE>_slide_manifest.csv
 ```
 
 ## External cohort (minimal public example)
@@ -93,11 +93,11 @@ Generator:
 
 ```bash
 python scripts/generate_versioned_split_manifest.py \
-  --manifest data/manifests/TCGA_PTEN_slide_manifest.csv \
-  --target PTEN \
+  --manifest data/manifests/TCGA_<GENE>_slide_manifest.csv \
+  --target <GENE> \
   --label-column label_index \
-  --target-dir data/checkpoints/PTEN
+  --target-dir data/checkpoints/<GENE>
 ```
 
 Output:
-`data/checkpoints/PTEN/versioned_split_manifest/PTEN_all_splits_latest.csv`
+`data/checkpoints/<GENE>/versioned_split_manifest/<GENE>_all_splits_latest.csv`

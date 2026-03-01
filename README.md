@@ -514,8 +514,8 @@ Summarize a single gene’s patient-level mutation status:
 ```bash
 python targets/variants/summarize_gene_status.py \
   --annotations data/oncokb/oncokb_annotations.csv \
-  --gene PTEN \
-  --output data/targets/PTEN_patient_labels.csv
+  --gene <GENE> \
+  --output data/targets/<GENE>_patient_labels.csv
 ```
 
 Build a slide-level manifest by joining SVS paths to patient labels:
@@ -523,18 +523,18 @@ Build a slide-level manifest by joining SVS paths to patient labels:
 ```bash
 python targets/tcga/build_slide_manifest_from_svs_and_mutations.py \
   --svs-root data/gdc_download \
-  --labels data/targets/PTEN_patient_labels.csv \
-  --output data/manifests/TCGA_PTEN_slide_manifest.csv
+  --labels data/targets/<GENE>_patient_labels.csv \
+  --output data/manifests/TCGA_<GENE>_slide_manifest.csv
 ```
 
 Generate the manuscript-style split manifest:
 
 ```bash
 PYTHONPATH=. python scripts/generate_versioned_split_manifest.py \
-  --manifest data/manifests/TCGA_PTEN_slide_manifest.csv \
-  --target PTEN \
+  --manifest data/manifests/TCGA_<GENE>_slide_manifest.csv \
+  --target <GENE> \
   --label-column label_index \
-  --target-dir data/checkpoints/PTEN
+  --target-dir data/checkpoints/<GENE>
 ```
 
 See manifest header examples:
@@ -547,9 +547,9 @@ The canonical tiler is `goldmark/tiling/extractor.py`. For convenience, this rep
 small CLI:
 
 ```bash
-PYTHONPATH=. python -m goldmark tiling data/manifests/TCGA_PTEN_slide_manifest.csv \
+PYTHONPATH=. python -m goldmark tiling data/manifests/TCGA_<GENE>_slide_manifest.csv \
   --output runs \
-  --run-name tcga_pten_demo \
+  --run-name tcga_<GENE>_demo \
   --tile-size 224 \
   --stride 224 \
   --target-mpp 0.5
@@ -569,10 +569,10 @@ If **tile/feature counts mismatch** or embeddings are **degenerate (low variance
 Example:
 
 ```bash
-PYTHONPATH=. python -m goldmark features data/manifests/TCGA_PTEN_slide_manifest.csv \
-  --tile-manifests runs/tcga_pten_demo/tiling/tiles \
+PYTHONPATH=. python -m goldmark features data/manifests/TCGA_<GENE>_slide_manifest.csv \
+  --tile-manifests runs/tcga_<GENE>_demo/tiling/tiles \
   --output runs \
-  --run-name tcga_pten_demo \
+  --run-name tcga_<GENE>_demo \
   --encoder prov-gigapath \
   --device cuda \
   --num-workers 4
@@ -582,8 +582,8 @@ Optional integrity audit (tile counts vs feature lengths):
 
 ```bash
 python scripts/check_tile_feature_counts.py \
-  --tile-manifest-dir runs/tcga_pten_demo/tiling/tiles/manifests \
-  --feature-dir runs/tcga_pten_demo/features/prov-gigapath
+  --tile-manifest-dir runs/tcga_<GENE>_demo/tiling/tiles/manifests \
+  --feature-dir runs/tcga_<GENE>_demo/features/prov-gigapath
 ```
 
 ### 4) Training (reference gated-attention MIL head)
