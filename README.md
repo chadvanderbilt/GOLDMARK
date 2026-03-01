@@ -676,33 +676,8 @@ in `sbatch` (or your scheduler of choice).
 
 ## Run a full project (default)
 
-The `scripts/tcga_cv_to_external_full_run.py` runner defaults to the **full cohort** (`--per-class 0`).
-For a quick sanity check, set `--per-class` to a small value and optionally set `--limit-tiles`.
-
-Important:
-- This can download **hundreds of SVS files** (many 10s–100s of GB). Use a scratch filesystem.
-- By default the TCGA slide filter keeps diagnostic FFPE slides (`-00-DX`). Use `--allow-non-dx` to disable this.
-- Foundation-model encoders may require authentication/approval (e.g. gated HF repos). Put tokens in `configs/secrets.env`.
-
-Example (single full task: TCGA-LUAD EGFR → external LUAD):
-
-```bash
-export RUNS_ROOT="runs"
-export RUN_NAME="tcga_luad_egfr_full"
-
-python scripts/tcga_cv_to_external_full_run.py \
-  --output "${RUNS_ROOT}" \
-  --run-name "${RUN_NAME}" \
-  --project-id "TCGA-LUAD" \
-  --gene "EGFR" \
-  --external-per-class 0 \
-  --encoder "h-optimus-0" \
-  --device "cuda" \
-  --epochs 120
-```
-
-HPC:
-- See `examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh` and set `PER_CLASS=0` (and optionally `EXTERNAL_PER_CLASS=0`).
+Use the SLURM/nohup/end‑to‑end accordions above. They cover full‑cohort runs (`PER_CLASS=0`) plus
+20x‑only, 40x‑only, and external‑inference variants.
 
 ## Notes
 
