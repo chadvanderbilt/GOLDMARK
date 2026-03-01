@@ -99,15 +99,47 @@ These are not hard-coded to a specific project or gene.
 <summary><strong>SLURM (GPU example)</strong> — <code>examples/slurm/submit_tcga_cv_to_external.sh</code></summary>
 
 ```bash
-# Example: TCGA-LUAD / EGFR / h-optimus-0, resume in-place
-PROJECT_ID=TCGA-LUAD \
-GENE=EGFR \
-ENCODER=h-optimus-0 \
-RUN_MODE=resume \
+# Example: minimal resume (20x+40x, no external)
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=0.25
 sbatch examples/slurm/submit_tcga_cv_to_external.sh
 ```
 
-<strong>SLURM submission example (LUAD EGFR + external inference)</strong> — <code>examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh</code>
+<strong>20x only (no external)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=
+sbatch examples/slurm/submit_tcga_cv_to_external.sh
+```
+
+<strong>40x only (no external)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export TARGET_MPP=0.25
+export EXTRA_TARGET_MPP=
+sbatch examples/slurm/submit_tcga_cv_to_external.sh
+```
+
+<strong>External inference (20x+40x)</strong> — <code>examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh</code>
 
 ```bash
 export PROJECT_ID=TCGA-LUAD
@@ -130,22 +162,53 @@ Notes for SLURM users:
 - Some clusters require different SBATCH fields (account/QoS/time/memory). Adjust the header in `examples/slurm/submit_tcga_cv_to_external.sh` to match local policy.
 </details>
 
+External inference only runs if `EXTERNAL_MANIFEST` (and optionally `EXTERNAL_ROOT`) are set.
+
 <details>
 <summary><strong>nohup (interactive node)</strong> — <code>scripts/nohup_tcga_cv_to_external.sh</code></summary>
 
 ```bash
-PROJECT_ID=TCGA-LUAD \
-GENE=EGFR \
-ENCODER=h-optimus-0 \
-RUN_MODE=resume \
+# Example: minimal resume (20x+40x, no external)
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=0.25
 bash scripts/nohup_tcga_cv_to_external.sh
-
-# watch
-tail -f runs/<run-name>/logs/nohup.out
 ```
-</details>
 
-Full example (LUAD EGFR, resume, 20x+40x) with explicit external manifest/root:
+<strong>20x only (no external)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export TARGET_MPP=0.5
+export EXTRA_TARGET_MPP=
+bash scripts/nohup_tcga_cv_to_external.sh
+```
+
+<strong>40x only (no external)</strong>
+
+```bash
+export PROJECT_ID=TCGA-LUAD
+export GENE=EGFR
+export ENCODER=h-optimus-0
+export RUN_NAME=TCGA-LUAD
+export RUN_MODE=resume
+export PER_CLASS=0
+export TARGET_MPP=0.25
+export EXTRA_TARGET_MPP=
+bash scripts/nohup_tcga_cv_to_external.sh
+```
+
+<strong>External inference (20x+40x)</strong>
 
 ```bash
 export PROJECT_ID=TCGA-LUAD
@@ -159,10 +222,15 @@ export TARGET_MPP=0.5
 export EXTRA_TARGET_MPP=0.25
 export EXTERNAL_MANIFEST=/path/to/external_manifest.csv
 export EXTERNAL_ROOT=/path/to/foundation_model_training_images/EXTERNAL
-bash /data1/vanderbc/vanderbc/GOLDMARK/scripts/nohup_tcga_cv_to_external.sh
+bash scripts/nohup_tcga_cv_to_external.sh
 ```
 
-Note: external inference only runs if `EXTERNAL_MANIFEST` (and optionally `EXTERNAL_ROOT`) are set.
+Watch logs:
+
+```bash
+tail -f runs/<run-name>/logs/nohup.out
+```
+</details>
 
 **End-to-end example (foreground)** — `examples/run_tcga_luad_egfr_end_to_end.sh`
 
