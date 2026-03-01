@@ -229,6 +229,17 @@ class InferenceRunner:
                 tile_df = None
             if tile_df is not None and not tile_df.empty:
                 usable = min(len(weights), len(tile_df))
+                # Attention weights align to the tile manifest row order because features were
+                # extracted in that same order. We write a copy of the per-slide manifest
+                # with an added attention column so downstream consumers have full tile metadata.
+                tile_with_attention = tile_df.copy()
+                tile_with_attention["attention"] = np.nan
+                if usable > 0:
+                    tile_with_attention.loc[: usable - 1, "attention"] = weights[:usable]
+                tile_with_attention["probability"] = float(probability)
+                tile_with_attention.to_csv(
+                    out_dir / f"{slide_id}_tiles_with_attention.csv", index=False
+                )
                 for idx in range(usable):
                     row = tile_df.iloc[idx]
                     records.append(
