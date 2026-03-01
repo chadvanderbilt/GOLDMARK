@@ -42,10 +42,8 @@ cp configs/secrets.env.example configs/secrets.env
 source /home/vanderbc/.bashrc
 bash scripts/setup_conda_goldmark_env.sh
 
-# Option B: venv (requires Python 3.10+ and native OpenSlide installed on your system)
-# python3 -m venv .venv
-# source .venv/bin/activate
-# python -m pip install -r requirements.txt -r requirements-wsi.txt -r requirements-encoders.txt
+# Option B (sudo/venv): installs system deps + creates venv
+bash scripts/setup_goldmark_sudo.sh
 
 # Installs gdc-client into bin/ (ignored by git)
 python scripts/install_gdc_client.py --dest bin/gdc-client
@@ -467,8 +465,11 @@ source /home/vanderbc/.bashrc
 bash scripts/setup_conda_goldmark_env.sh
 ```
 
-If you cannot use conda, create a venv and install requirements:
-`requirements.txt`, `requirements-wsi.txt`, `requirements-encoders.txt`.
+If you have sudo and prefer a venv:
+
+```bash
+bash scripts/setup_goldmark_sudo.sh
+```
 
 ## Quickstart (typical flow)
 
