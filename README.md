@@ -102,8 +102,13 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>prov-gigapath</strong></summary>
 
 **Access**
-- Hugging Face: `prov-gigapath/prov-gigapath` (may require access approval)
-- Set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or login via `huggingface-cli login`.
+- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+
+**Hugging Face (more details)**
+```
+Repo: prov-gigapath/prov-gigapath
+URL: https://huggingface.co/prov-gigapath/prov-gigapath
+```
 
 **Implementation**
 - Loader: `timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)`
@@ -115,7 +120,13 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>EAGLE</strong></summary>
 
 **Access**
-- Hugging Face: `MCCPBR/EAGLE` (public)
+- Public on Hugging Face; set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` if needed.
+
+**Hugging Face (more details)**
+```
+Repo: MCCPBR/EAGLE
+URL: https://huggingface.co/MCCPBR/EAGLE
+```
 
 **Implementation**
 - Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
@@ -128,7 +139,14 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>UNI</strong></summary>
 
 **Access**
-- Local checkpoint required: `MIL_UNI_CHECKPOINT` or `weights/uni_checkpoint.pth`
+- Hugging Face access (gated); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+- Local checkpoint path is supported via `MIL_UNI_CHECKPOINT` or `weights/uni_checkpoint.pth`.
+
+**Hugging Face (more details)**
+```
+Repo: MahmoodLab/UNI
+URL: https://huggingface.co/MahmoodLab/UNI
+```
 
 **Implementation**
 - Loader: `timm.create_model("vit_large_patch16_224", ...)` + load checkpoint
@@ -140,7 +158,13 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>Virchow</strong></summary>
 
 **Access**
-- Hugging Face: `paige-ai/Virchow` (may require access approval)
+- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+
+**Hugging Face (more details)**
+```
+Repo: paige-ai/Virchow
+URL: https://huggingface.co/paige-ai/Virchow
+```
 
 **Implementation**
 - Loader: `timm.create_model("hf-hub:paige-ai/Virchow", ...)` with `SwiGLUPacked` + `SiLU`
@@ -152,7 +176,13 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>Virchow2</strong></summary>
 
 **Access**
-- Hugging Face: `paige-ai/Virchow2` (may require access approval)
+- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+
+**Hugging Face (more details)**
+```
+Repo: paige-ai/Virchow2
+URL: https://huggingface.co/paige-ai/Virchow2
+```
 
 **Implementation**
 - Loader: `timm.create_model("hf-hub:paige-ai/Virchow2", ...)` with `SwiGLUPacked` + `SiLU`
@@ -164,7 +194,13 @@ recommended preprocessing from the original model repositories. Access typically
 <summary><strong>h-optimus-0</strong></summary>
 
 **Access**
-- Hugging Face: `bioptimus/H-optimus-0` (gated; requires explicit approval)
+- Hugging Face access (gated; requires explicit approval).
+
+**Hugging Face (more details)**
+```
+Repo: bioptimus/H-optimus-0
+URL: https://huggingface.co/bioptimus/H-optimus-0
+```
 
 **Implementation**
 - Loader: `timm.create_model("hf-hub:bioptimus/H-optimus-0", pretrained=True)`
