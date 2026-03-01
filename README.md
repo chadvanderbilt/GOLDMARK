@@ -363,10 +363,6 @@ Written under each split so split context is self-contained:
 
 Note: the training stage also writes probability exports under the same directory (e.g. `probabilities_test_set.csv`).
 
-Attention index caches are written once per encoder under `tile_attn/`:
-- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/tile_attn/attn_index_cv_split_<N>_epoch_<EEE>.parquet`
-- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/tile_attn/attn_index_external_split_<N>_epoch_<EEE>.parquet`
-
 **F) External inference (external LUAD)**
 
 External inference runs **for each split** using the **best AUC epoch** from CV plus any configured epochs
