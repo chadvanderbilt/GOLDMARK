@@ -340,6 +340,9 @@ When `EXTRA_TARGET_MPP` is set, the additional tiling pass writes to:
   - `features_<slide_id>.FAILED_tile_count_mismatch.pt`
   - `features_<slide_id>.FAILED_degenerate_embeddings.pt`
 
+Feature tensors are saved as PyTorch `.pt` files with rows aligned to the slide’s tile manifest order,
+so each row can be joined back to tile coordinates using the corresponding tile manifest CSV.
+
 When `EXTRA_TARGET_MPP` is set, the additional feature pass writes **into the same encoder directory**
 using a filename suffix:
 - `runs/<project-id>/features/<encoder>/features_<slide_id>_40x.pt` (for `EXTRA_TARGET_MPP=0.25`)
@@ -359,6 +362,10 @@ Written under each split so split context is self-contained:
 - `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/split_1_set/inference/test/plots/roc_pr_curves.png`
 
 Note: the training stage also writes probability exports under the same directory (e.g. `probabilities_test_set.csv`).
+
+Attention index caches are written once per encoder under `tile_attn/`:
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/tile_attn/attn_index_cv_split_<N>_epoch_<EEE>.parquet`
+- `runs/<project-id>/training/checkpoints/<GENE>/<ENCODER>/tile_attn/attn_index_external_split_<N>_epoch_<EEE>.parquet`
 
 **F) External inference (external LUAD)**
 
@@ -393,6 +400,9 @@ Additional epochs (e.g., final epoch) appear under:
 - `width`, `height` (tile size in pixels at `level`)
 - `tissue_fraction` (fraction of tile kept after tissue mask filtering)
 - `tile_path` (optional; blank when only coordinates are generated)
+
+**Tile manifest with attention** (`.../attention/<slide_id>_tiles_with_attention.csv`)
+- Same columns as the tile manifest, plus `attention` and `probability` for that slide.
 
 **Feature metadata JSON** (`features/<encoder>/features_<slide_id>.json`)
 - `slide_id`, `encoder`
