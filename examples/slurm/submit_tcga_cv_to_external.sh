@@ -91,6 +91,7 @@ EXTERNAL_MANIFEST="${EXTERNAL_MANIFEST:-}"
 EXTERNAL_ROOT="${EXTERNAL_ROOT:-}"
 LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-25}"
+VAL_PER_CLASS="${VAL_PER_CLASS:-0}"
 PATIENCE="${PATIENCE:-50}"
 
 TILING_ARGS=("--target-mpp" "${TARGET_MPP}")
@@ -122,5 +123,6 @@ fi
   "${TILING_ARGS[@]}" \
   "${LIMIT_ARGS[@]}" \
   --epochs "${EPOCHS}" \
+  --val-per-class "${VAL_PER_CLASS}" \
   --patience "${PATIENCE}" \
   "${EXTRA_ARGS[@]}"

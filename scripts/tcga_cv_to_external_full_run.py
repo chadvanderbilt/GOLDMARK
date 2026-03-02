@@ -1163,6 +1163,9 @@ def _add_val_assignments(
     import numpy as np
     import pandas as pd
 
+    if int(val_per_class) <= 0:
+        return
+
     rng = np.random.default_rng(int(seed))
     labels = pd.to_numeric(df[label_column], errors="coerce").fillna(0).astype(int)
     for split_col in split_columns:
@@ -1454,6 +1457,14 @@ def main() -> int:
     )
     parser.add_argument("--epochs", type=int, default=10, help="Training epochs (default: 10)")
     parser.add_argument("--patience", type=int, default=50, help="Early stopping patience (default: 50)")
+    parser.add_argument(
+        "--val-per-class",
+        type=int,
+        default=0,
+        help=(
+            "Validation samples per class for each split (default: 0 = use full test split for validation)."
+        ),
+    )
     parser.add_argument("--tile-size", type=int, default=224)
     parser.add_argument("--stride", type=int, default=224)
     parser.add_argument("--target-mpp", type=float, default=0.5)
@@ -1742,7 +1753,7 @@ def main() -> int:
                 df,
                 split_columns=split_columns,
                 label_column="label_index",
-                val_per_class=1,
+                val_per_class=int(args.val_per_class),
                 seed=10_000 + seed,
             )
             ok = True
@@ -1857,6 +1868,7 @@ def main() -> int:
     feature_dir = run_dir / "features" / str(args.encoder)
 
     # Stage 3: 5-split cross-validation training
+    val_split_value = "test" if int(args.val_per_class) <= 0 else "val"
     aggregator_name = "gma"
     aggregator_label = aggregator_name.upper()
     target_checkpoints_root = _ensure_target_checkpoint_root(
@@ -1894,7 +1906,7 @@ def main() -> int:
             "--train-value",
             "train",
             "--val-value",
-            "val",
+            val_split_value,
             "--test-value",
             "test",
             "--cv-columns",

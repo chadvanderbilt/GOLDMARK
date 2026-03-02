@@ -310,7 +310,10 @@ bash examples/run_tcga_luad_egfr_end_to_end.sh
 - `EXTRA_TARGET_MPP` (default: `0.25`; comma-separated MPP buckets — each slide is assigned to the nearest bucket)
 - `RUN_NAME` (default: `${PROJECT_ID}`)
 - `RUN_MODE` in `{force|resume|rebuild}` (default: `force`)
-- `PER_CLASS`, `EXTERNAL_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`
+  - `force`: delete the run directory and re-run everything from scratch.
+  - `resume`: keep all existing outputs; only run missing stages (downloads/tiling/features/training/inference).
+  - `rebuild`: keep downloads + derived labels, but re-run **tiling, features, training, inference, external_inference, plots**.
+- `PER_CLASS`, `EXTERNAL_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`, `VAL_PER_CLASS` (default: `0` = use full test split for validation)
 
 By default, `RUN_NAME` is set to the project id so all outputs live under `runs/<project-id>/`.
 

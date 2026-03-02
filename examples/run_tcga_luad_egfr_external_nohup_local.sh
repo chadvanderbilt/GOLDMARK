@@ -18,9 +18,10 @@ export PER_CLASS=0
 export EXTERNAL_PER_CLASS=0
 export TARGET_MPP=0.5
 export EXTRA_TARGET_MPP=0.25
+export VAL_PER_CLASS=0
 
 # External cohort manifest + root (Vanderbilt layout).
-export EXTERNAL_MANIFEST=/data1/vanderbc/foundation_model_training_images/IMPACT/manifests/mutations/final_gene_binary_manifest_latest.csv
+export EXTERNAL_MANIFEST=/data1/vanderbc/foundation_model_training_images/IMPACT/manifests/Lung_Adenocarcinoma_annotated_deidentified.csv
 export EXTERNAL_ROOT=/data1/vanderbc/foundation_model_training_images/IMPACT
 
 bash /data1/vanderbc/vanderbc/GOLDMARK/scripts/nohup_tcga_cv_to_external.sh

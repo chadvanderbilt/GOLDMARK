@@ -59,6 +59,7 @@ EXTERNAL_ROOT="${EXTERNAL_ROOT:-}"
 LIMIT_TILES="${LIMIT_TILES:-0}"
 
 EPOCHS="${EPOCHS:-25}"
+VAL_PER_CLASS="${VAL_PER_CLASS:-0}"
 PATIENCE="${PATIENCE:-50}"
 
 EXTERNAL_ARGS=()
@@ -86,5 +87,6 @@ python scripts/tcga_cv_to_external_full_run.py \
   --device "cuda" \
   "${LIMIT_ARGS[@]}" \
   --epochs "${EPOCHS}" \
+  --val-per-class "${VAL_PER_CLASS}" \
   --patience "${PATIENCE}" \
   --force
