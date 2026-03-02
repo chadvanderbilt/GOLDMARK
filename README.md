@@ -93,128 +93,6 @@ These are not hard-coded to a specific project or gene.
 
 Make sure the `goldmark` conda environment is active (or set `CONDA_ENV=goldmark` before running the scripts).
 
-### Canonical pathology foundation model encoders
-
-Each encoder below reflects the implementation in `goldmark/features/canonical_sources.py`, which follows the
-recommended preprocessing from the original model repositories. Access typically requires a Hugging Face token.
-
-<details>
-<summary><strong>prov-gigapath</strong></summary>
-
-**Access**
-- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
-
-**Hugging Face (more details)**
-```
-Repo: prov-gigapath/prov-gigapath
-URL: https://huggingface.co/prov-gigapath/prov-gigapath
-```
-
-**Implementation**
-- Loader: `timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)`
-- Transform: resize 256 → center crop 224 → ImageNet normalize (timm defaults)
-- Tile size: 224
-- Feature dim: 1536
-</details>
-
-<details>
-<summary><strong>EAGLE</strong></summary>
-
-**Access**
-- Public on Hugging Face; set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` if needed.
-
-**Hugging Face (more details)**
-```
-Repo: MCCPBR/EAGLE
-URL: https://huggingface.co/MCCPBR/EAGLE
-```
-
-**Implementation**
-- Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
-  EAGLE implementation.
-- Patch spec (model card): 20x / 0.5 mpp, 224‑pixel patches
-- Transform (model card): `ToTensor()` + ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
-- Tile size: 224
-- Feature dim: 1536 (ViT‑g encoder)
-</details>
-
-<details>
-<summary><strong>UNI</strong></summary>
-
-**Access**
-- Hugging Face access (gated); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
-- If you already have weights locally, point `MIL_UNI_CHECKPOINT` to the file (fallback: `weights/uni_checkpoint.pth`).
-
-**Hugging Face (more details)**
-```
-Repo: MahmoodLab/UNI
-URL: https://huggingface.co/MahmoodLab/UNI
-```
-
-**Implementation**
-- Loader: `timm.create_model("vit_large_patch16_224", ...)` + load checkpoint
-- Transform: resize 224 → ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
-- Tile size: 224
-- Feature dim: 1024
-</details>
-
-<details>
-<summary><strong>Virchow</strong></summary>
-
-**Access**
-- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
-
-**Hugging Face (more details)**
-```
-Repo: paige-ai/Virchow
-URL: https://huggingface.co/paige-ai/Virchow
-```
-
-**Implementation**
-- Loader: `timm.create_model("hf-hub:paige-ai/Virchow", ...)` with `SwiGLUPacked` + `SiLU`
-- Transform: `timm.create_transform` from model config
-- Tile size: 224 (0.5 mpp recommended by model card)
-- Feature dim: 2560 (class token + pooled patch tokens)
-</details>
-
-<details>
-<summary><strong>Virchow2</strong></summary>
-
-**Access**
-- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
-
-**Hugging Face (more details)**
-```
-Repo: paige-ai/Virchow2
-URL: https://huggingface.co/paige-ai/Virchow2
-```
-
-**Implementation**
-- Loader: `timm.create_model("hf-hub:paige-ai/Virchow2", ...)` with `SwiGLUPacked` + `SiLU`
-- Transform: `timm.create_transform` from model config
-- Tile size: 224 (0.5 mpp recommended by model card)
-- Feature dim: 2560 (class token + pooled patch tokens; ignores 4 register tokens)
-</details>
-
-<details>
-<summary><strong>h-optimus-0</strong></summary>
-
-**Access**
-- Hugging Face access (gated; requires explicit approval).
-
-**Hugging Face (more details)**
-```
-Repo: bioptimus/H-optimus-0
-URL: https://huggingface.co/bioptimus/H-optimus-0
-```
-
-**Implementation**
-- Loader: `timm.create_model("hf-hub:bioptimus/H-optimus-0", pretrained=True)`
-- Transform: resize 224 → normalize Bioptimus mean/std (mean=(0.707223,0.578729,0.703617), std=(0.211883,0.230117,0.177517))
-- Tile size: 224 (0.5 mpp recommended by model card)
-- Feature dim: 1536
-</details>
-
 <details>
 <summary><strong>SLURM (GPU example)</strong> — <code>examples/slurm/submit_tcga_cv_to_external.sh</code></summary>
 
@@ -578,6 +456,128 @@ Docs:
 - `docs/pipeline.md`
 - SLURM (generic): `examples/slurm/submit_tcga_cv_to_external.sh`
 - SLURM (EGFR example): `examples/slurm/submit_tcga_luad_EGFR_cv_to_external.sh`
+
+### Canonical pathology foundation model encoders
+
+Each encoder below reflects the implementation in `goldmark/features/canonical_sources.py`, which follows the
+recommended preprocessing from the original model repositories. Access typically requires a Hugging Face token.
+
+<details>
+<summary><strong>prov-gigapath</strong></summary>
+
+**Access**
+- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+
+**Hugging Face (more details)**
+```
+Repo: prov-gigapath/prov-gigapath
+URL: https://huggingface.co/prov-gigapath/prov-gigapath
+```
+
+**Implementation**
+- Loader: `timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)`
+- Transform: resize 256 → center crop 224 → ImageNet normalize (timm defaults)
+- Tile size: 224
+- Feature dim: 1536
+</details>
+
+<details>
+<summary><strong>EAGLE</strong></summary>
+
+**Access**
+- Public on Hugging Face; set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` if needed.
+
+**Hugging Face (more details)**
+```
+Repo: MCCPBR/EAGLE
+URL: https://huggingface.co/MCCPBR/EAGLE
+```
+
+**Implementation**
+- Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
+  EAGLE implementation.
+- Patch spec (model card): 20x / 0.5 mpp, 224‑pixel patches
+- Transform (model card): `ToTensor()` + ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
+- Tile size: 224
+- Feature dim: 1536 (ViT‑g encoder)
+</details>
+
+<details>
+<summary><strong>UNI</strong></summary>
+
+**Access**
+- Hugging Face access (gated); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+- If you already have weights locally, point `MIL_UNI_CHECKPOINT` to the file (fallback: `weights/uni_checkpoint.pth`).
+
+**Hugging Face (more details)**
+```
+Repo: MahmoodLab/UNI
+URL: https://huggingface.co/MahmoodLab/UNI
+```
+
+**Implementation**
+- Loader: `timm.create_model("vit_large_patch16_224", ...)` + load checkpoint
+- Transform: resize 224 → ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
+- Tile size: 224
+- Feature dim: 1024
+</details>
+
+<details>
+<summary><strong>Virchow</strong></summary>
+
+**Access**
+- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+
+**Hugging Face (more details)**
+```
+Repo: paige-ai/Virchow
+URL: https://huggingface.co/paige-ai/Virchow
+```
+
+**Implementation**
+- Loader: `timm.create_model("hf-hub:paige-ai/Virchow", ...)` with `SwiGLUPacked` + `SiLU`
+- Transform: `timm.create_transform` from model config
+- Tile size: 224 (0.5 mpp recommended by model card)
+- Feature dim: 2560 (class token + pooled patch tokens)
+</details>
+
+<details>
+<summary><strong>Virchow2</strong></summary>
+
+**Access**
+- Hugging Face access (may require approval); set `HF_TOKEN`/`HUGGINGFACE_HUB_TOKEN` or use `huggingface-cli login`.
+
+**Hugging Face (more details)**
+```
+Repo: paige-ai/Virchow2
+URL: https://huggingface.co/paige-ai/Virchow2
+```
+
+**Implementation**
+- Loader: `timm.create_model("hf-hub:paige-ai/Virchow2", ...)` with `SwiGLUPacked` + `SiLU`
+- Transform: `timm.create_transform` from model config
+- Tile size: 224 (0.5 mpp recommended by model card)
+- Feature dim: 2560 (class token + pooled patch tokens; ignores 4 register tokens)
+</details>
+
+<details>
+<summary><strong>h-optimus-0</strong></summary>
+
+**Access**
+- Hugging Face access (gated; requires explicit approval).
+
+**Hugging Face (more details)**
+```
+Repo: bioptimus/H-optimus-0
+URL: https://huggingface.co/bioptimus/H-optimus-0
+```
+
+**Implementation**
+- Loader: `timm.create_model("hf-hub:bioptimus/H-optimus-0", pretrained=True)`
+- Transform: resize 224 → normalize Bioptimus mean/std (mean=(0.707223,0.578729,0.703617), std=(0.211883,0.230117,0.177517))
+- Tile size: 224 (0.5 mpp recommended by model card)
+- Feature dim: 1536
+</details>
 
 ## Repository layout
 
