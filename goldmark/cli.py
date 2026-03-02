@@ -377,6 +377,8 @@ def run_training(args: argparse.Namespace) -> None:
     manifest = pd.read_csv(args.manifest)
     paths = PipelinePaths(args.output, args.run_name, stage="training")
     paths.ensure()
+    checkpoints_dir = Path(args.checkpoints_root).expanduser().resolve() if args.checkpoints_root else paths.checkpoints_dir
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
     test_value = None if args.test_value and args.test_value.lower() == "none" else args.test_value
     base_config = TrainerConfig(
@@ -403,7 +405,7 @@ def run_training(args: argparse.Namespace) -> None:
         run_cross_validation(
             manifest=manifest,
             feature_dir=feature_dir,
-            base_output_dir=paths.checkpoints_dir,
+            base_output_dir=checkpoints_dir,
             target_column=args.target,
             base_config=base_config,
             split_columns=args.cv_columns,
@@ -413,14 +415,14 @@ def run_training(args: argparse.Namespace) -> None:
         trainer = MILTrainer(
             manifest=manifest,
             feature_dir=feature_dir,
-            output_dir=paths.checkpoints_dir,
+            output_dir=checkpoints_dir,
             target_column=args.target,
             config=base_config,
             log_level=args.log_level,
         )
         trainer.run()
 
-    print(f"Training artifacts saved to {paths.checkpoints_dir}")
+    print(f"Training artifacts saved to {checkpoints_dir}")
 
 
 def run_inference(args: argparse.Namespace) -> None:
@@ -585,6 +587,10 @@ def build_parser() -> argparse.ArgumentParser:
     training_parser.add_argument("--class-weight-positive", type=float)
     training_parser.add_argument("--no-dropout", action="store_true")
     training_parser.add_argument("--encoder-name", help="Encoder/feature directory name for progress tracking")
+    training_parser.add_argument(
+        "--checkpoints-root",
+        help="Override training checkpoints directory (default: runs/<run-name>/training/checkpoints)",
+    )
     training_parser.set_defaults(func=run_training)
 
     inference_parser = subparsers.add_parser("inference", help="Run inference and overlays")

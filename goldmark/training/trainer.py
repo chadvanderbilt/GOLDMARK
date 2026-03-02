@@ -686,8 +686,8 @@ class MILTrainer:
         else:
             slide_ids = raw_slide_ids.astype("string")
             mask = slide_ids.isna() | slide_ids.str.strip().eq("")
-            with pd.option_context("mode.use_inf_as_na", True):
-                mask = mask | slide_ids.str.lower().eq("nan")
+            lower = slide_ids.str.lower()
+            mask = mask | lower.isin(["nan", "inf", "-inf"])
             slide_ids = slide_ids.mask(mask, fallback)
             slide_ids = slide_ids.fillna(fallback)
         payload = pd.DataFrame(

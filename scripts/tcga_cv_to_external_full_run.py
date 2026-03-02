@@ -270,7 +270,10 @@ def _ensure_alias_dir(alias: Path, target: Path, *, label: str) -> None:
 
 
 def _ensure_target_checkpoint_root(
-    base_root: Path, target_root: Path, encoder_name: Optional[str] = None
+    base_root: Path,
+    target_root: Path,
+    encoder_name: Optional[str] = None,
+    aggregator_name: Optional[str] = None,
 ) -> Path:
     base_root.mkdir(parents=True, exist_ok=True)
     target_root.mkdir(parents=True, exist_ok=True)
@@ -280,22 +283,33 @@ def _ensure_target_checkpoint_root(
         if safe_encoder:
             encoder_root = target_root / safe_encoder
             encoder_root.mkdir(parents=True, exist_ok=True)
-    move_candidates: List[Path] = []
-    if base_root.exists():
-        for entry in base_root.iterdir():
-            if entry.name == target_root.name:
+    aggregator_root = encoder_root
+    if aggregator_name:
+        safe_aggregator = re.sub(r"[^0-9A-Za-z._-]+", "_", str(aggregator_name)).strip("_-.")
+        if safe_aggregator:
+            aggregator_root = encoder_root / safe_aggregator
+            aggregator_root.mkdir(parents=True, exist_ok=True)
+
+    def _collect_moves(root: Path) -> List[Path]:
+        moves: List[Path] = []
+        if not root.exists():
+            return moves
+        for entry in root.iterdir():
+            if entry.name in {target_root.name, encoder_root.name, aggregator_root.name}:
                 continue
             if entry.name.startswith("split_") or entry.name == "classification_report":
-                move_candidates.append(entry)
+                moves.append(entry)
             elif entry.is_file():
-                move_candidates.append(entry)
-    if move_candidates:
-        for entry in move_candidates:
-            dest = encoder_root / entry.name
-            if dest.exists():
-                continue
-            shutil.move(str(entry), str(dest))
-    return encoder_root
+                moves.append(entry)
+        return moves
+
+    move_candidates = _collect_moves(base_root) + _collect_moves(encoder_root)
+    for entry in move_candidates:
+        dest = aggregator_root / entry.name
+        if dest.exists():
+            continue
+        shutil.move(str(entry), str(dest))
+    return aggregator_root
 
 
 def _download_is_complete(file_id: str, filename: str, size: int, download_root: Path) -> bool:
@@ -1843,6 +1857,14 @@ def main() -> int:
     feature_dir = run_dir / "features" / str(args.encoder)
 
     # Stage 3: 5-split cross-validation training
+    aggregator_name = "gma"
+    aggregator_label = aggregator_name.upper()
+    target_checkpoints_root = _ensure_target_checkpoint_root(
+        checkpoints_root,
+        target_dir,
+        encoder_name=str(args.encoder),
+        aggregator_name=aggregator_label,
+    )
     _run_goldmark(
         [
             "training",
@@ -1853,10 +1875,12 @@ def main() -> int:
             str(output_root),
             "--run-name",
             str(args.run_name),
+            "--checkpoints-root",
+            str(target_checkpoints_root),
             "--target",
             "label_index",
             "--aggregator",
-            "gma",
+            aggregator_name,
             "--epochs",
             str(int(args.epochs)),
             "--patience",
@@ -1876,9 +1900,6 @@ def main() -> int:
             "--cv-columns",
             *split_columns,
         ]
-    )
-    target_checkpoints_root = _ensure_target_checkpoint_root(
-        checkpoints_root, target_dir, encoder_name=str(args.encoder)
     )
     _ensure_alias_dir(run_dir / "checkpoints", run_dir / "training" / "checkpoints", label="checkpoints")
 
