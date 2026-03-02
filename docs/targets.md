@@ -66,6 +66,13 @@ python targets/variants/summarize_gene_status.py \
   --output data/targets/PTEN_patient_labels.csv
 ```
 
+The output now includes per-patient **p. changes** and **OncoKB level** summaries:
+- `p_changes` (joined with `|` for multiple mutations; `no_gene_changes` if none)
+- `oncokb_levels` (joined with `|`)
+- `oncokb_positive` / `has_gene_mutation` / `label_reason`
+
+`label_index` is **positive if any mutation is OncoKB level 1/2/3** for the target gene.
+
 Finally, join SVS paths to those patient labels:
 
 ```bash

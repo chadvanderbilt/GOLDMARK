@@ -681,6 +681,13 @@ python targets/variants/summarize_gene_status.py \
   --output data/targets/<GENE>_patient_labels.csv
 ```
 
+The output includes per-patient **p. changes** and **OncoKB level** summaries for spot-checking:
+- `p_changes` (joined with `|` for multiple mutations; `no_gene_changes` if none)
+- `oncokb_levels` (joined with `|`)
+- `oncokb_positive` / `has_gene_mutation` / `label_reason`
+
+`label_index` is **positive if any mutation is OncoKB level 1/2/3** for the target gene.
+
 Build a slide-level manifest by joining SVS paths to patient labels:
 
 ```bash

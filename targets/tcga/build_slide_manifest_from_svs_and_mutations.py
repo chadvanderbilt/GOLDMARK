@@ -68,7 +68,7 @@ def main() -> int:
         raise ValueError(f"Missing patient column '{args.patient_column}' in {label_path}")
     if args.label_column not in labels.columns:
         raise ValueError(f"Missing label column '{args.label_column}' in {label_path}")
-    labels = labels[[args.patient_column, args.label_column]].copy()
+    labels = labels.copy()
     labels[args.patient_column] = labels[args.patient_column].astype(str).str.strip()
     labels[args.label_column] = pd.to_numeric(labels[args.label_column], errors="raise").astype(int)
 
@@ -94,11 +94,8 @@ def main() -> int:
         )
 
     manifest = pd.DataFrame(rows)
-    merged = manifest.merge(
-        labels.rename(columns={args.patient_column: "patient_id", args.label_column: "label_index"}),
-        how="left",
-        on="patient_id",
-    )
+    rename_map = {args.patient_column: "patient_id", args.label_column: "label_index"}
+    merged = manifest.merge(labels.rename(columns=rename_map), how="left", on="patient_id")
     if merged["label_index"].isna().any():
         missing = merged.loc[merged["label_index"].isna(), "patient_id"].astype(str).unique().tolist()[:10]
         raise ValueError(
@@ -110,7 +107,9 @@ def main() -> int:
 
     out_path = Path(args.output).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    merged[["slide_path", "slide_id", "DMP_ASSAY_ID", "label_index", "target"]].to_csv(out_path, index=False)
+    core_cols = ["slide_path", "slide_id", "DMP_ASSAY_ID", "label_index", "target"]
+    extra_cols = [col for col in merged.columns if col not in core_cols]
+    merged[core_cols + extra_cols].to_csv(out_path, index=False)
     print(f"Wrote slide manifest -> {out_path}")
     return 0
 

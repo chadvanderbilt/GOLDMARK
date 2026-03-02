@@ -118,19 +118,35 @@ def main() -> int:
         "Variant_Type",
         "Mutation_Status",
     ]
+    optional_columns = [
+        "HGVSp_Short",
+        "Protein_Change",
+        "HGVSp",
+    ]
 
     for maf_path in maf_files:
         df = pd.read_csv(maf_path, compression="gzip", sep="\t", comment="#", low_memory=False)
         missing = [c for c in columns if c not in df.columns]
         if missing:
             raise ValueError(f"{maf_path} missing required MAF columns: {missing}")
-        df = df[columns].copy()
+        keep_cols = columns + [c for c in optional_columns if c in df.columns]
+        df = df[keep_cols].copy()
+        for col in optional_columns:
+            if col not in df.columns:
+                df[col] = pd.NA
         if gene_set is not None:
             df = df[df["Hugo_Symbol"].astype(str).isin(gene_set)].copy()
         if df.empty:
             continue
 
         df["patient_id"] = df["Tumor_Sample_Barcode"].astype(str).str.slice(0, 12)
+        df["protein_change"] = (
+            df["HGVSp_Short"]
+            .fillna(df["Protein_Change"])
+            .fillna(df["HGVSp"])
+            .astype(str)
+            .replace({"nan": ""})
+        )
         df["hgvsg"] = df.apply(
             lambda row: build_hgvsg(
                 chromosome=row["Chromosome"],
@@ -181,6 +197,7 @@ def main() -> int:
                     "Variant_Classification": getattr(row, "Variant_Classification"),
                     "Variant_Type": getattr(row, "Variant_Type"),
                     "Mutation_Status": getattr(row, "Mutation_Status"),
+                    "protein_change": getattr(row, "protein_change"),
                     "hgvsg": hgvsg,
                     **anno,
                 }
