@@ -112,7 +112,8 @@ URL: https://huggingface.co/prov-gigapath/prov-gigapath
 
 **Implementation**
 - Loader: `timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)`
-- Transform: resize 256 → center crop 224 → normalize ImageNet
+- Transform: resize 256 → center crop 224 → ImageNet normalize (timm defaults)
+- Tile size: 224
 - Feature dim: 1536
 </details>
 
@@ -130,9 +131,11 @@ URL: https://huggingface.co/MCCPBR/EAGLE
 
 **Implementation**
 - Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
-  internal EAGLE implementation.
-- Transform: follow the EAGLE repo’s preprocessing exactly (see internal docs).
-- Feature dim: defined by the EAGLE encoder (see internal docs).
+  EAGLE implementation.
+- Patch spec (model card): 20x / 0.5 mpp, 224‑pixel patches
+- Transform (model card): `ToTensor()` + ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
+- Tile size: 224
+- Feature dim: 1536 (ViT‑g encoder)
 </details>
 
 <details>
@@ -150,7 +153,8 @@ URL: https://huggingface.co/MahmoodLab/UNI
 
 **Implementation**
 - Loader: `timm.create_model("vit_large_patch16_224", ...)` + load checkpoint
-- Transform: resize 224 → normalize ImageNet
+- Transform: resize 224 → ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
+- Tile size: 224
 - Feature dim: 1024
 </details>
 
@@ -169,6 +173,7 @@ URL: https://huggingface.co/paige-ai/Virchow
 **Implementation**
 - Loader: `timm.create_model("hf-hub:paige-ai/Virchow", ...)` with `SwiGLUPacked` + `SiLU`
 - Transform: `timm.create_transform` from model config
+- Tile size: 224 (0.5 mpp recommended by model card)
 - Feature dim: 2560 (class token + pooled patch tokens)
 </details>
 
@@ -187,7 +192,8 @@ URL: https://huggingface.co/paige-ai/Virchow2
 **Implementation**
 - Loader: `timm.create_model("hf-hub:paige-ai/Virchow2", ...)` with `SwiGLUPacked` + `SiLU`
 - Transform: `timm.create_transform` from model config
-- Feature dim: 2560 (class token + pooled patch tokens)
+- Tile size: 224 (0.5 mpp recommended by model card)
+- Feature dim: 2560 (class token + pooled patch tokens; ignores 4 register tokens)
 </details>
 
 <details>
@@ -204,7 +210,8 @@ URL: https://huggingface.co/bioptimus/H-optimus-0
 
 **Implementation**
 - Loader: `timm.create_model("hf-hub:bioptimus/H-optimus-0", pretrained=True)`
-- Transform: resize 224 → normalize Bioptimus mean/std
+- Transform: resize 224 → normalize Bioptimus mean/std (mean=(0.707223,0.578729,0.703617), std=(0.211883,0.230117,0.177517))
+- Tile size: 224 (0.5 mpp recommended by model card)
 - Feature dim: 1536
 </details>
 
