@@ -311,7 +311,7 @@ bash examples/run_tcga_luad_egfr_end_to_end.sh
 - `EXTRA_TARGET_MPP` (default: `0.25`; comma-separated MPP buckets — each slide is assigned to the nearest bucket)
 - `RUN_NAME` (default: `${PROJECT_ID}`)
 - `RUN_MODE` in `{force|resume|rebuild}` (default: `force`)
-  - `force`: delete the run directory and re-run everything from scratch.
+  - `force`: reset **derived outputs only** (tiling/features/training/inference/etc.) and **preserve `gdc_downloads/`**; re-downloads happen **only** if checksum/size validation fails.
   - `resume`: keep all existing outputs; only run missing stages (downloads/tiling/features/training/inference).
   - `rebuild`: keep downloads + derived labels, but re-run **tiling, features, training, inference, external_inference, plots**.
 - `PER_CLASS`, `EXTERNAL_PER_CLASS`, `LIMIT_TILES`, `EPOCHS`, `PATIENCE`, `VAL_PER_CLASS` (default: `0` = use full test split for validation)
@@ -670,8 +670,12 @@ Annotate MAF with OncoKB (token via env var):
 # export ONCOKB_TOKEN="..."  # or set in configs/secrets.env
 python targets/variants/annotate_maf_oncokb_by_hgvsg.py \
   --maf-glob "data/gdc_download/**/**.maf.gz" \
+  --oncotree-code <ONCOTREE_CODE> \
   --output data/oncokb/oncokb_annotations.csv
 ```
+
+`--oncotree-code` ensures OncoKB levels are computed for the correct tumor type
+(e.g., `LUAD` for TCGA-LUAD).
 
 Summarize a single gene’s patient-level mutation status:
 

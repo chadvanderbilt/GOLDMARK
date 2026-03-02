@@ -1046,6 +1046,7 @@ def _select_gene_subset(
     oncokb_annotations: Optional[str] = None,
     oncokb_labels: Optional[str] = None,
     target_manifest_dir: Optional[Path] = None,
+    oncotree_code: Optional[str] = None,
 ) -> Tuple[List[_ManifestRow], Optional[pd.DataFrame]]:
     """Select `per_class` positive/negative patients by downloading/parsing per-case MAFs."""
     per_class = int(per_class)
@@ -1111,6 +1112,7 @@ def _select_gene_subset(
     oncokb_labels_df: Optional[pd.DataFrame] = None
     label_map: Dict[str, int] = {}
     if use_oncokb:
+        oncotree_code = (oncotree_code or "").strip() or _project_to_oncotree(project_id)
         if target_manifest_dir is None:
             target_manifest_dir = maf_download_dir.parent
         target_manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -1136,6 +1138,7 @@ def _select_gene_subset(
                         str(maf_download_dir / "**" / "*.maf.gz"),
                         "--gene-list",
                         str(gene_list_path),
+                        *(["--oncotree-code", oncotree_code] if oncotree_code else []),
                         "--output",
                         str(oncokb_annotations_path),
                     ],
@@ -1161,7 +1164,9 @@ def _select_gene_subset(
                 oncokb_labels_df["patient_id"].astype(str).str.strip()
             )
             label_map = (
-                pd.to_numeric(oncokb_labels_df["label_index"], errors="coerce")
+                pd.to_numeric(
+                    oncokb_labels_df.set_index("patient_id")["label_index"], errors="coerce"
+                )
                 .fillna(0)
                 .astype(int)
                 .to_dict()
@@ -1518,6 +1523,15 @@ def _pick_best_split(cv_summary_path: Path) -> str:
     return str(df["split"].iloc[0])
 
 
+def _project_to_oncotree(project_id: str) -> str:
+    token = str(project_id or "").strip()
+    if not token:
+        return ""
+    if token.upper().startswith("TCGA-") and "-" in token:
+        return token.split("-", 1)[1].strip().upper()
+    return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="runs", help="Pipeline output root (default: runs/)")
@@ -1575,6 +1589,11 @@ def main() -> int:
         default="",
         help="Optional precomputed patient labels CSV (skips OncoKB annotation + summarization).",
     )
+    parser.add_argument(
+        "--oncotree-code",
+        default="",
+        help="Optional OncoTree code for tumor type (e.g., LUAD). Defaults to project-id suffix when possible.",
+    )
     parser.add_argument("--retry-amount", type=int, default=20, help="gdc-client retry amount (default: 20)")
     parser.add_argument(
         "--force-downloads",
@@ -1603,7 +1622,11 @@ def main() -> int:
         help="External cases per class (default: 0 = full cohort). Use 0 to run all labeled cases.",
     )
     parser.add_argument("--allow-non-dx", action="store_true", help="Include non-diagnostic slides (disable -00-DX filter)")
-    parser.add_argument("--force", action="store_true", help="Overwrite an existing run directory")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reset derived outputs while preserving downloads (use --force-downloads to re-download).",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -1641,7 +1664,19 @@ def main() -> int:
     run_dir = output_root / str(args.run_name)
     if run_dir.exists():
         if args.force:
-            shutil.rmtree(run_dir)
+            # Preserve downloads; wipe derived outputs only.
+            for stage in (
+                "tiling",
+                "features",
+                "training",
+                "inference",
+                "external_inference",
+                "plots",
+                "logs",
+            ):
+                target = run_dir / stage
+                if target.exists():
+                    shutil.rmtree(target)
         elif args.rebuild:
             # Preserve downloads + derived labels, but wipe stage outputs.
             for stage in ("tiling", "features", "training", "inference", "external_inference", "plots"):
@@ -1678,7 +1713,7 @@ def main() -> int:
                     download_root=svs_download_dir,
                     token_file=args.token,
                     retry_amount=int(args.retry_amount),
-                    force_downloads=bool(args.force or args.force_downloads),
+                    force_downloads=bool(args.force_downloads),
                 )
     else:
         gdc_client = _ensure_gdc_client(args.gdc_client)
@@ -1700,12 +1735,13 @@ def main() -> int:
             maf_download_dir=maf_download_dir,
             token_file=args.token,
             retry_amount=int(args.retry_amount),
-            force_downloads=bool(args.force or args.force_downloads),
+            force_downloads=bool(args.force_downloads),
             experimental_strategy=str(args.mutation_strategy or ""),
             use_oncokb=True,
             oncokb_annotations=str(args.oncokb_annotations or ""),
             oncokb_labels=str(args.oncokb_labels or ""),
             target_manifest_dir=target_manifest_dir,
+            oncotree_code=str(args.oncotree_code or ""),
         )
 
         tumor = sum(1 for r in subset if r.label_index == 1)
@@ -1715,7 +1751,7 @@ def main() -> int:
 
         _write_filtered_gdc_manifest(subset, subset_manifest)
         svs_download_dir.mkdir(parents=True, exist_ok=True)
-        force_downloads = bool(args.force or args.force_downloads)
+        force_downloads = bool(args.force_downloads)
         download_rows = (
             subset
             if force_downloads
@@ -1763,7 +1799,7 @@ def main() -> int:
                 download_root=svs_download_dir,
                 token_file=args.token,
                 retry_amount=int(args.retry_amount),
-                force_downloads=bool(args.force or args.force_downloads),
+                force_downloads=bool(args.force_downloads),
             )
             base = {
                 "slide_id": row.barcode,

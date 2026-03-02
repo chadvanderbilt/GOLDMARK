@@ -83,6 +83,16 @@ def main() -> int:
         "--gene-list",
         help="Optional TSV listing cancer genes to keep (column: 'Hugo Symbol').",
     )
+    parser.add_argument(
+        "--tumor-type",
+        default="",
+        help="Optional tumor type / OncoTree code for OncoKB (e.g., LUAD).",
+    )
+    parser.add_argument(
+        "--oncotree-code",
+        default="",
+        help="Alias for --tumor-type (preferred to pass OncoTree code).",
+    )
     parser.add_argument("--reference-genome", default="GRCh38", choices=["GRCh38", "GRCh37"])
     parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Sleep between API requests (rate limiting).")
     parser.add_argument("--max-rows", type=int, help="Optional cap for demo/debug runs.")
@@ -101,6 +111,7 @@ def main() -> int:
     api_endpoint = "https://www.oncokb.org/api/v1/annotate/mutations/byHGVSg"
     session = requests.Session()
     session.headers.update({"accept": "application/json", "Authorization": f"Bearer {token}"})
+    tumor_type = (args.tumor_type or args.oncotree_code or "").strip()
 
     cache: Dict[str, Dict[str, Any]] = {}
     out_rows: list[dict[str, Any]] = []
@@ -125,7 +136,15 @@ def main() -> int:
     ]
 
     for maf_path in maf_files:
-        df = pd.read_csv(maf_path, compression="gzip", sep="\t", comment="#", low_memory=False)
+        maf_path = str(maf_path)
+        try:
+            if not Path(maf_path).exists() or Path(maf_path).stat().st_size == 0:
+                print(f"[warn] Skipping missing/empty MAF: {maf_path}")
+                continue
+            df = pd.read_csv(maf_path, compression="gzip", sep="\t", comment="#", low_memory=False)
+        except Exception as exc:
+            print(f"[warn] Failed to read MAF {maf_path}: {exc}")
+            continue
         missing = [c for c in columns if c not in df.columns]
         if missing:
             raise ValueError(f"{maf_path} missing required MAF columns: {missing}")
@@ -169,6 +188,8 @@ def main() -> int:
                 anno = cache[hgvsg]
             else:
                 params = {"hgvsg": hgvsg, "referenceGenome": args.reference_genome}
+                if tumor_type:
+                    params["tumorType"] = tumor_type
                 resp = session.get(api_endpoint, params=params, timeout=30)
                 if resp.status_code == 429:
                     time.sleep(max(1.0, args.sleep_seconds or 0.0))

@@ -56,7 +56,7 @@ fi
 RUNS_ROOT="${RUNS_ROOT:-${REPO_ROOT}/runs}"
 
 # Run mode:
-# - force   : wipe existing run dir and start over (default)
+# - force   : wipe derived outputs but keep downloads (default)
 # - resume  : reuse existing run dir + manifests; continue from existing outputs
 # - rebuild : preserve smoke_data, rebuild tiling/features/training/inference
 RUN_MODE="${RUN_MODE:-force}"
@@ -93,6 +93,7 @@ LIMIT_TILES="${LIMIT_TILES:-0}"
 EPOCHS="${EPOCHS:-25}"
 VAL_PER_CLASS="${VAL_PER_CLASS:-0}"
 PATIENCE="${PATIENCE:-50}"
+ONCOTREE_CODE="${ONCOTREE_CODE:-}"
 
 TILING_ARGS=("--target-mpp" "${TARGET_MPP}")
 if [[ -n "${EXTRA_TARGET_MPP}" ]]; then
@@ -110,6 +111,10 @@ LIMIT_ARGS=()
 if [[ "${LIMIT_TILES}" -gt 0 ]]; then
   LIMIT_ARGS+=("--limit-tiles" "${LIMIT_TILES}")
 fi
+ONCOTREE_ARGS=()
+if [[ -n "${ONCOTREE_CODE}" ]]; then
+  ONCOTREE_ARGS+=("--oncotree-code" "${ONCOTREE_CODE}")
+fi
 
 "${PYTHON_BIN}" scripts/tcga_cv_to_external_full_run.py \
   --output "${RUNS_ROOT}" \
@@ -125,4 +130,5 @@ fi
   --epochs "${EPOCHS}" \
   --val-per-class "${VAL_PER_CLASS}" \
   --patience "${PATIENCE}" \
+  "${ONCOTREE_ARGS[@]}" \
   "${EXTRA_ARGS[@]}"
