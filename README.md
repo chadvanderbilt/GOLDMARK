@@ -24,6 +24,7 @@ of downloads and non-trivial runtime.
 **Preflight checklist (avoid the common failure modes)**
 - Most encoders are hosted on Hugging Face; **approval + a valid HF token are required to run this pipeline**. Without access you will hit `401 Unauthorized` during feature extraction.
 - Ensure `configs/secrets.env` exists and is **sourced for non-interactive runs** (SLURM/nohup). Example: `set -a; source configs/secrets.env; set +a`
+- **OncoKB is required** for TCGA mutation labeling in this pipeline. Set `ONCOKB_TOKEN` in `configs/secrets.env` (or provide precomputed OncoKB labels). The pipeline will refuse to run without it.
 - If you use `h-optimus-0`, your `HUGGINGFACE_HUB_TOKEN` (or `HF_TOKEN`) must have **explicit access** to `bioptimus/H-optimus-0`. A `401 Unauthorized` means the token is missing or lacks access.
 - `gdc-client` requires newer glibc on some clusters. If it fails, GOLDMARK falls back to the GDC API (slower). For full cohorts, prefer a compatible `gdc-client` or a newer node.
 - Some clusters do **not** provide `python`. Use `python3` or set `PYTHON_BIN` in the SLURM script.

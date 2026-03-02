@@ -48,6 +48,9 @@ targets/tcga/gdc_download.sh --manifest tcga_svs_manifest.tsv --out data/gdc_dow
 
 ### Variant labeling + OncoKB
 
+OncoKB is **required** for mutation labeling in the full pipeline. Set `ONCOKB_TOKEN` in `configs/secrets.env`
+or provide precomputed OncoKB annotations/labels; the pipeline refuses to run without one of these.
+
 This repo includes a token-safe OncoKB annotator:
 
 ```bash
