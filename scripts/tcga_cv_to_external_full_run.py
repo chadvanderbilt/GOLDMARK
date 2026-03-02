@@ -1125,12 +1125,17 @@ def _select_gene_subset(
                 oncokb_annotations_path = target_manifest_dir / "oncokb_annotations.csv"
                 if not os.environ.get("ONCOKB_TOKEN"):
                     raise ValueError("Missing ONCOKB_TOKEN required for OncoKB annotations.")
+                gene_list_path = target_manifest_dir / f"oncokb_gene_list_{gene_upper}.tsv"
+                if not gene_list_path.exists():
+                    gene_list_path.write_text("Hugo Symbol\n" + gene_upper + "\n")
                 subprocess.run(
                     [
                         sys.executable,
                         str(REPO_ROOT / "targets" / "variants" / "annotate_maf_oncokb_by_hgvsg.py"),
                         "--maf-glob",
                         str(maf_download_dir / "**" / "*.maf.gz"),
+                        "--gene-list",
+                        str(gene_list_path),
                         "--output",
                         str(oncokb_annotations_path),
                     ],
