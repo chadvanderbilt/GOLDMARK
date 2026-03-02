@@ -496,10 +496,39 @@ URL: https://huggingface.co/MCCPBR/EAGLE
 **Implementation**
 - Loader: use the custom encoder hook (`--custom-encoder` / `--custom-encoder-script`) to point at the
   EAGLE implementation.
-- Patch spec (model card): 20x / 0.5 mpp, 224‑pixel patches
-- Transform (model card): `ToTensor()` + ImageNet normalize (mean=(0.485,0.456,0.406), std=(0.229,0.224,0.225))
-- Tile size: 224
-- Feature dim: 1536 (ViT‑g encoder)
+- Transform: follow the EAGLE repo’s preprocessing exactly (see internal docs).
+- Feature dim: defined by the EAGLE encoder (see internal docs).
+
+**EAGLE repo reference (example)**
+```bash
+git clone --no-checkout https://huggingface.co/MCCPBR/EAGLE && cd EAGLE
+```
+
+```python
+from PIL import Image
+import numpy as np
+import eagle
+import torch
+import torchvision.transforms as transforms
+
+# Load model
+model = eagle.EAGLE()
+
+# Set up transform
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+])
+
+# Image
+img = np.random.randint(0, 256, size=224*224*3).reshape(224,224,3).astype(np.uint8)
+img = Image.fromarray(img)
+img = transform(img).unsqueeze(0)
+
+# Inference
+with torch.no_grad():
+    h, att, p = model(img)
+```
 </details>
 
 <details>
