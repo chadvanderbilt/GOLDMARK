@@ -58,7 +58,7 @@ EXTERNAL_ROOT="${EXTERNAL_ROOT:-}"
 # - 0 disables limiting (tiles the full tissue mask; can be very large)
 LIMIT_TILES="${LIMIT_TILES:-0}"
 
-EPOCHS="${EPOCHS:-10}"
+EPOCHS="${EPOCHS:-25}"
 PATIENCE="${PATIENCE:-50}"
 
 EXTERNAL_ARGS=()

@@ -81,7 +81,7 @@ python scripts/tcga_cv_to_external_full_run.py \
   --run-name TCGA-LUAD \
   --per-class 0 \
   --device cuda \
-  --epochs 10 \
+  --epochs 25 \
   --patience 50 \
   --force
 ```
