@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import pandas as pd
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -1040,7 +1042,11 @@ def _select_gene_subset(
     retry_amount: int = 3,
     force_downloads: bool = False,
     experimental_strategy: str = "WXS",
-) -> List[_ManifestRow]:
+    use_oncokb: bool = True,
+    oncokb_annotations: Optional[str] = None,
+    oncokb_labels: Optional[str] = None,
+    target_manifest_dir: Optional[Path] = None,
+) -> Tuple[List[_ManifestRow], Optional[pd.DataFrame]]:
     """Select `per_class` positive/negative patients by downloading/parsing per-case MAFs."""
     per_class = int(per_class)
     gene_upper = str(gene).strip().upper()
@@ -1057,10 +1063,10 @@ def _select_gene_subset(
     selected: List[_ManifestRow] = []
     counts = {0: 0, 1: 0}
     checked = 0
-    for patient_id in sorted(by_patient.keys()):
-        if not full_cohort and counts[0] >= per_class and counts[1] >= per_class:
-            break
+    maf_paths: Dict[str, Path] = {}
 
+    # Always collect MAFs for OncoKB labeling so labels are consistent.
+    for patient_id in sorted(by_patient.keys()):
         maf_hit = _query_case_maf_file(
             project_id=str(project_id),
             patient_id=str(patient_id),
@@ -1098,10 +1104,74 @@ def _select_gene_subset(
         maf_path = maf_download_dir / file_id / filename
         if not maf_path.exists() or maf_path.stat().st_size == 0:
             continue
+        maf_paths[patient_id] = maf_path
+        if not use_oncokb and not full_cohort and counts[0] >= per_class and counts[1] >= per_class:
+            break
+
+    oncokb_labels_df: Optional[pd.DataFrame] = None
+    label_map: Dict[str, int] = {}
+    if use_oncokb:
+        if target_manifest_dir is None:
+            target_manifest_dir = maf_download_dir.parent
+        target_manifest_dir.mkdir(parents=True, exist_ok=True)
+        labels_path = Path(oncokb_labels).expanduser() if oncokb_labels else None
+        if labels_path and labels_path.exists():
+            oncokb_labels_df = pd.read_csv(labels_path)
+        else:
+            annotations_path = Path(oncokb_annotations).expanduser() if oncokb_annotations else None
+            if annotations_path and annotations_path.exists():
+                oncokb_annotations_path = annotations_path
+            else:
+                oncokb_annotations_path = target_manifest_dir / "oncokb_annotations.csv"
+                if not os.environ.get("ONCOKB_TOKEN"):
+                    raise ValueError("Missing ONCOKB_TOKEN required for OncoKB annotations.")
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(REPO_ROOT / "targets" / "variants" / "annotate_maf_oncokb_by_hgvsg.py"),
+                        "--maf-glob",
+                        str(maf_download_dir / "**" / "*.maf.gz"),
+                        "--output",
+                        str(oncokb_annotations_path),
+                    ],
+                    check=True,
+                )
+            labels_path = target_manifest_dir / f"{gene_upper}_patient_labels.csv"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "targets" / "variants" / "summarize_gene_status.py"),
+                    "--annotations",
+                    str(oncokb_annotations_path),
+                    "--gene",
+                    str(gene_upper),
+                    "--output",
+                    str(labels_path),
+                ],
+                check=True,
+            )
+            oncokb_labels_df = pd.read_csv(labels_path)
+        if oncokb_labels_df is not None:
+            oncokb_labels_df["patient_id"] = (
+                oncokb_labels_df["patient_id"].astype(str).str.strip()
+            )
+            label_map = (
+                pd.to_numeric(oncokb_labels_df["label_index"], errors="coerce")
+                .fillna(0)
+                .astype(int)
+                .to_dict()
+            )
+
+    for patient_id in sorted(by_patient.keys()):
+        if patient_id not in maf_paths:
+            continue
 
         checked += 1
-        is_positive = _maf_has_gene_variant(maf_path, gene_upper)
-        label = 1 if is_positive else 0
+        if use_oncokb:
+            label = int(label_map.get(patient_id, 0))
+        else:
+            is_positive = _maf_has_gene_variant(maf_paths[patient_id], gene_upper)
+            label = 1 if is_positive else 0
         if not full_cohort and counts[label] >= per_class:
             continue
 
@@ -1142,14 +1212,14 @@ def _select_gene_subset(
                 f"Full-cohort labeling found only one class for {gene_upper} in {project_id} "
                 f"(pos={counts[1]} neg={counts[0]})."
             )
-        return sorted(selected, key=lambda r: (r.label_index, r.size, r.filename))
+        return sorted(selected, key=lambda r: (r.label_index, r.size, r.filename)), oncokb_labels_df
 
     if counts[0] < per_class or counts[1] < per_class:
         raise ValueError(
             f"Unable to find enough labeled cases for {gene_upper} in {project_id}. "
             f"Selected pos={counts[1]} neg={counts[0]} (requested {per_class} each)."
         )
-    return sorted(selected, key=lambda r: (r.label_index, r.size, r.filename))
+    return sorted(selected, key=lambda r: (r.label_index, r.size, r.filename)), oncokb_labels_df
 
 
 def _add_val_assignments(
@@ -1484,6 +1554,22 @@ def main() -> int:
     parser.add_argument("--gdc-client", default=None, help="Path to gdc-client (default: auto-install/bin/ or PATH)")
     parser.add_argument("--token", default=None, help="Optional GDC token file for controlled-access data")
     parser.add_argument("--mutation-strategy", default="WXS", help="Experimental strategy filter for mutation calls")
+    parser.add_argument(
+        "--use-oncokb",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require OncoKB annotations for labeling (default: true).",
+    )
+    parser.add_argument(
+        "--oncokb-annotations",
+        default="",
+        help="Optional precomputed OncoKB annotations CSV (skips API calls).",
+    )
+    parser.add_argument(
+        "--oncokb-labels",
+        default="",
+        help="Optional precomputed patient labels CSV (skips OncoKB annotation + summarization).",
+    )
     parser.add_argument("--retry-amount", type=int, default=20, help="gdc-client retry amount (default: 20)")
     parser.add_argument(
         "--force-downloads",
@@ -1538,6 +1624,13 @@ def main() -> int:
 
     if not args.token:
         args.token = os.environ.get("GDC_TOKEN_FILE") or None
+
+    if not bool(args.use_oncokb):
+        raise ValueError("OncoKB labeling is required. Remove --no-use-oncokb.")
+    if not (str(args.oncokb_labels).strip() or str(args.oncokb_annotations).strip() or os.environ.get("ONCOKB_TOKEN")):
+        raise ValueError(
+            "OncoKB labeling requires ONCOKB_TOKEN or precomputed --oncokb-labels/--oncokb-annotations."
+        )
 
     output_root = Path(args.output).expanduser().resolve()
     run_dir = output_root / str(args.run_name)
@@ -1594,7 +1687,7 @@ def main() -> int:
         if not rows:
             raise ValueError("No SVS rows found after filtering; check project-id or --allow-non-dx.")
 
-        subset = _select_gene_subset(
+        subset, oncokb_labels_df = _select_gene_subset(
             rows,
             project_id=str(args.project_id),
             gene=str(args.gene),
@@ -1604,6 +1697,10 @@ def main() -> int:
             retry_amount=int(args.retry_amount),
             force_downloads=bool(args.force or args.force_downloads),
             experimental_strategy=str(args.mutation_strategy or ""),
+            use_oncokb=True,
+            oncokb_annotations=str(args.oncokb_annotations or ""),
+            oncokb_labels=str(args.oncokb_labels or ""),
+            target_manifest_dir=target_manifest_dir,
         )
 
         tumor = sum(1 for r in subset if r.label_index == 1)
@@ -1663,16 +1760,35 @@ def main() -> int:
                 retry_amount=int(args.retry_amount),
                 force_downloads=bool(args.force or args.force_downloads),
             )
-            slide_rows.append(
-                {
-                    "slide_id": row.barcode,
-                    "slide_path": str(slide_path),
-                    "label_index": int(row.label_index),
-                    "patient_id": row.patient_id,
-                }
-            )
+            base = {
+                "slide_id": row.barcode,
+                "slide_path": str(slide_path),
+                "label_index": int(row.label_index),
+                "patient_id": row.patient_id,
+            }
+            slide_rows.append(base)
         with slide_manifest.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["slide_id", "slide_path", "label_index", "patient_id"])
+            extra_fields: List[str] = []
+            if oncokb_labels_df is not None:
+                extra_fields = [
+                    col
+                    for col in oncokb_labels_df.columns
+                    if col not in {"patient_id", "label_index"}
+                ]
+                lookup = (
+                    oncokb_labels_df.set_index("patient_id")[extra_fields]
+                    if extra_fields
+                    else None
+                )
+                if lookup is not None:
+                    for row in slide_rows:
+                        patient_id = row.get("patient_id")
+                        if patient_id in lookup.index:
+                            row.update(lookup.loc[patient_id].to_dict())
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["slide_id", "slide_path", "label_index", "patient_id"] + extra_fields,
+            )
             writer.writeheader()
             writer.writerows(slide_rows)
         print(f"[tcga] Slide manifest: {slide_manifest} (rows={len(slide_rows)})")
