@@ -1506,6 +1506,7 @@ def _load_external_manifest_balanced(
         raise ValueError("External manifest missing slide identifier column (need slide_id).")
 
     rows: List[Dict[str, object]] = []
+    missing_features: List[str] = []
     for _, row in picked.iterrows():
         slide_id = str(row[slide_id_col]).strip()
         if not slide_id:
@@ -1517,7 +1518,11 @@ def _load_external_manifest_balanced(
         if feature_path_value:
             feature_path = Path(feature_path_value).expanduser()
         elif feature_dir is not None:
-            feature_path, meta_path = _discover_external_feature(feature_dir, slide_id)
+            try:
+                feature_path, meta_path = _discover_external_feature(feature_dir, slide_id)
+            except FileNotFoundError:
+                missing_features.append(slide_id)
+                continue
         if feature_path is not None and meta_path is None:
             meta_path = feature_path.with_suffix(".json")
         slide_path = str(row.get("slide_path") or "").strip() or None
@@ -1534,6 +1539,9 @@ def _load_external_manifest_balanced(
                 "feature_path": str(feature_path),
             }
         )
+    if missing_features:
+        preview = ", ".join(missing_features[:8])
+        print(f"[external] Skipped {len(missing_features)} slides missing features (e.g., {preview}).")
     if not rows:
         raise ValueError("No usable external rows found (feature lookup failed for all selected slides).")
     return rows, feature_dir
