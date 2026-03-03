@@ -95,6 +95,9 @@ def main() -> int:
     )
     parser.add_argument("--reference-genome", default="GRCh38", choices=["GRCh38", "GRCh37"])
     parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Sleep between API requests (rate limiting).")
+    parser.add_argument("--timeout-seconds", type=float, default=30.0, help="OncoKB request timeout (seconds).")
+    parser.add_argument("--max-retries", type=int, default=3, help="Retry OncoKB requests on timeouts/5xx/429.")
+    parser.add_argument("--retry-backoff", type=float, default=1.5, help="Backoff multiplier between retries.")
     parser.add_argument("--max-rows", type=int, help="Optional cap for demo/debug runs.")
     args = parser.parse_args()
 
@@ -190,13 +193,28 @@ def main() -> int:
                 params = {"hgvsg": hgvsg, "referenceGenome": args.reference_genome}
                 if tumor_type:
                     params["tumorType"] = tumor_type
-                resp = session.get(api_endpoint, params=params, timeout=30)
-                if resp.status_code == 429:
-                    time.sleep(max(1.0, args.sleep_seconds or 0.0))
-                    resp = session.get(api_endpoint, params=params, timeout=30)
-                if resp.status_code != 200:
-                    anno = {"oncokb_error": f"status={resp.status_code}"}
-                else:
+                resp = None
+                anno = None
+                for attempt in range(int(args.max_retries) + 1):
+                    try:
+                        resp = session.get(api_endpoint, params=params, timeout=float(args.timeout_seconds))
+                    except requests.exceptions.RequestException as exc:
+                        if attempt < int(args.max_retries):
+                            sleep_for = max(float(args.sleep_seconds or 0.0), float(args.retry_backoff) ** (attempt + 1))
+                            time.sleep(sleep_for)
+                            continue
+                        anno = {"oncokb_error": f"exception={exc.__class__.__name__}"}
+                        break
+                    if resp.status_code == 429 or resp.status_code >= 500:
+                        if attempt < int(args.max_retries):
+                            sleep_for = max(1.0, float(args.sleep_seconds or 0.0), float(args.retry_backoff) ** (attempt + 1))
+                            time.sleep(sleep_for)
+                            continue
+                        anno = {"oncokb_error": f"status={resp.status_code}"}
+                        break
+                    if resp.status_code != 200:
+                        anno = {"oncokb_error": f"status={resp.status_code}"}
+                        break
                     payload = resp.json() or {}
                     mut_effect = payload.get("mutationEffect") or {}
                     anno = {
@@ -206,6 +224,9 @@ def main() -> int:
                         "highestFdaLevel": payload.get("highestFdaLevel"),
                         "hotspot": payload.get("hotspot"),
                     }
+                    break
+                if anno is None:
+                    anno = {"oncokb_error": "unknown"}
                 cache[hgvsg] = anno
                 if args.sleep_seconds:
                     time.sleep(float(args.sleep_seconds))

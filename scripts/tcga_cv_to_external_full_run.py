@@ -1116,35 +1116,67 @@ def _select_gene_subset(
         if target_manifest_dir is None:
             target_manifest_dir = maf_download_dir.parent
         target_manifest_dir.mkdir(parents=True, exist_ok=True)
+
+        maf_mtime = 0.0
+        if maf_paths:
+            maf_mtime = max(path.stat().st_mtime for path in maf_paths.values())
+
         labels_path = Path(oncokb_labels).expanduser() if oncokb_labels else None
-        if labels_path and labels_path.exists():
-            oncokb_labels_df = pd.read_csv(labels_path)
+        annotations_path = Path(oncokb_annotations).expanduser() if oncokb_annotations else None
+
+        def _annotations_need_refresh(path: Optional[Path]) -> bool:
+            if not path or not path.exists() or path.stat().st_size == 0:
+                return True
+            if maf_mtime and path.stat().st_mtime < maf_mtime:
+                print("[oncokb] Annotations older than downloaded MAFs; regenerating.")
+                return True
+            try:
+                df = pd.read_csv(path)
+            except Exception:
+                return True
+            if "oncokb_error" in df.columns and df["oncokb_error"].notna().any():
+                print("[oncokb] Found oncokb_error entries; regenerating annotations.")
+                return True
+            return False
+
+        def _labels_need_refresh(path: Optional[Path], annotations_mtime: float) -> bool:
+            if not path or not path.exists() or path.stat().st_size == 0:
+                return True
+            if annotations_mtime and path.stat().st_mtime < annotations_mtime:
+                print("[oncokb] Labels older than annotations; regenerating.")
+                return True
+            return False
+
+        use_existing_annotations = annotations_path if annotations_path and annotations_path.exists() else None
+        if _annotations_need_refresh(use_existing_annotations):
+            use_existing_annotations = None
+
+        if use_existing_annotations is None:
+            oncokb_annotations_path = target_manifest_dir / "oncokb_annotations.csv"
+            if not os.environ.get("ONCOKB_TOKEN"):
+                raise ValueError("Missing ONCOKB_TOKEN required for OncoKB annotations.")
+            gene_list_path = target_manifest_dir / f"oncokb_gene_list_{gene_upper}.tsv"
+            if not gene_list_path.exists():
+                gene_list_path.write_text("Hugo Symbol\n" + gene_upper + "\n")
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "targets" / "variants" / "annotate_maf_oncokb_by_hgvsg.py"),
+                    "--maf-glob",
+                    str(maf_download_dir / "**" / "*.maf.gz"),
+                    "--gene-list",
+                    str(gene_list_path),
+                    *(["--oncotree-code", oncotree_code] if oncotree_code else []),
+                    "--output",
+                    str(oncokb_annotations_path),
+                ],
+                check=True,
+            )
         else:
-            annotations_path = Path(oncokb_annotations).expanduser() if oncokb_annotations else None
-            if annotations_path and annotations_path.exists():
-                oncokb_annotations_path = annotations_path
-            else:
-                oncokb_annotations_path = target_manifest_dir / "oncokb_annotations.csv"
-                if not os.environ.get("ONCOKB_TOKEN"):
-                    raise ValueError("Missing ONCOKB_TOKEN required for OncoKB annotations.")
-                gene_list_path = target_manifest_dir / f"oncokb_gene_list_{gene_upper}.tsv"
-                if not gene_list_path.exists():
-                    gene_list_path.write_text("Hugo Symbol\n" + gene_upper + "\n")
-                subprocess.run(
-                    [
-                        sys.executable,
-                        str(REPO_ROOT / "targets" / "variants" / "annotate_maf_oncokb_by_hgvsg.py"),
-                        "--maf-glob",
-                        str(maf_download_dir / "**" / "*.maf.gz"),
-                        "--gene-list",
-                        str(gene_list_path),
-                        *(["--oncotree-code", oncotree_code] if oncotree_code else []),
-                        "--output",
-                        str(oncokb_annotations_path),
-                    ],
-                    check=True,
-                )
-            labels_path = target_manifest_dir / f"{gene_upper}_patient_labels.csv"
+            oncokb_annotations_path = use_existing_annotations
+
+        labels_path = labels_path if labels_path else target_manifest_dir / f"{gene_upper}_patient_labels.csv"
+        if _labels_need_refresh(labels_path, oncokb_annotations_path.stat().st_mtime):
             subprocess.run(
                 [
                     sys.executable,
@@ -1158,19 +1190,19 @@ def _select_gene_subset(
                 ],
                 check=True,
             )
-            oncokb_labels_df = pd.read_csv(labels_path)
-        if oncokb_labels_df is not None:
-            oncokb_labels_df["patient_id"] = (
-                oncokb_labels_df["patient_id"].astype(str).str.strip()
+
+        oncokb_labels_df = pd.read_csv(labels_path)
+        oncokb_labels_df["patient_id"] = (
+            oncokb_labels_df["patient_id"].astype(str).str.strip()
+        )
+        label_map = (
+            pd.to_numeric(
+                oncokb_labels_df.set_index("patient_id")["label_index"], errors="coerce"
             )
-            label_map = (
-                pd.to_numeric(
-                    oncokb_labels_df.set_index("patient_id")["label_index"], errors="coerce"
-                )
-                .fillna(0)
-                .astype(int)
-                .to_dict()
-            )
+            .fillna(0)
+            .astype(int)
+            .to_dict()
+        )
 
     for patient_id in sorted(by_patient.keys()):
         if patient_id not in maf_paths:
@@ -1660,11 +1692,29 @@ def main() -> int:
             "OncoKB labeling requires ONCOKB_TOKEN or precomputed --oncokb-labels/--oncokb-annotations."
         )
 
+    gene_upper = str(args.gene).strip().upper()
+    if not gene_upper:
+        raise ValueError("--gene is required")
+
     output_root = Path(args.output).expanduser().resolve()
     run_dir = output_root / str(args.run_name)
     if run_dir.exists():
-        if args.force:
-            # Preserve downloads; wipe derived outputs only.
+        if args.force or args.rebuild:
+            # Preserve downloads + gene manifests; wipe derived outputs.
+            preserve_root = run_dir / ".preserve_manifests"
+            target_dir = run_dir / "training" / "checkpoints" / gene_upper
+            preserve_paths = [
+                target_dir / "manifests",
+                target_dir / "versioned_split_manifest",
+            ]
+            preserve_root.mkdir(parents=True, exist_ok=True)
+            for path in preserve_paths:
+                if path.exists():
+                    dest = preserve_root / path.name
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.move(str(path), str(dest))
+
             for stage in (
                 "tiling",
                 "features",
@@ -1677,18 +1727,19 @@ def main() -> int:
                 target = run_dir / stage
                 if target.exists():
                     shutil.rmtree(target)
-        elif args.rebuild:
-            # Preserve downloads + derived labels, but wipe stage outputs.
-            for stage in ("tiling", "features", "training", "inference", "external_inference", "plots"):
-                target = run_dir / stage
-                if target.exists():
-                    shutil.rmtree(target)
+
+            # Restore preserved manifests/splits.
+            for path in preserve_paths:
+                dest = preserve_root / path.name
+                if dest.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(dest), str(path))
+            if preserve_root.exists() and not any(preserve_root.iterdir()):
+                preserve_root.rmdir()
         elif not args.resume:
             raise FileExistsError(
                 f"Run directory already exists: {run_dir} (use --resume to continue, --rebuild to rerun stages, or --force to overwrite)"
             )
-
-    gene_upper = str(args.gene).strip().upper()
     checkpoints_root = run_dir / "training" / "checkpoints"
     target_dir = checkpoints_root / gene_upper
     target_manifest_dir = target_dir / "manifests"
@@ -1914,11 +1965,14 @@ def main() -> int:
                 seed=10_000 + seed,
             )
             ok = True
+            require_val = int(args.val_per_class) > 0
             for col in split_columns:
                 if not _split_has_both_classes(df, split_col=col, split_value="test", label_column="label_index"):
                     ok = False
                     break
-                if not _split_has_both_classes(df, split_col=col, split_value="val", label_column="label_index"):
+                if require_val and not _split_has_both_classes(
+                    df, split_col=col, split_value="val", label_column="label_index"
+                ):
                     ok = False
                     break
             if ok:
