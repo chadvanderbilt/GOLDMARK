@@ -1,4 +1,4 @@
-# GOLDMARK — Manuscript Reference Pipeline
+# GOLDMARK — Manuscript Reference Pipeline - https://artificialintelligencepathology.org/
 
 This repository is in support of the manuscript **GOLDMARK: Governed Outcome-Linked Diagnostic Model Assessment Reference Kit** and is composed of the end-to-end benchmarking pipeline:
 
