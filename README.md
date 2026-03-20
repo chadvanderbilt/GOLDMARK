@@ -844,10 +844,245 @@ python scripts/launch_manuscript_tasks.py --execute
 Note: this wrapper runs commands **sequentially**. On HPC clusters you will typically wrap each printed command
 in `sbatch` (or your scheduler of choice).
 
-## Run a full project (default)
+## Run a full project workflows
 
-Use the SLURM/nohup/end‑to‑end accordions above. They cover full‑cohort runs (`PER_CLASS=0`) plus
-20x‑only, 40x‑only, and external‑inference variants.
+<details>
+<summary><strong>1) Run a full project with slides from GDC (default)</strong></summary>
+
+Use the SLURM/nohup/end-to-end sections above. That path starts from GDC slide download and runs:
+
+`download -> tiling -> features -> training -> inference`
+
+Recommended entry points:
+
+- `scripts/tcga_cv_to_external_full_run.py`
+- `examples/slurm/submit_tcga_cv_to_external.sh`
+- `scripts/nohup_tcga_cv_to_external.sh`
+
+Public GOLDMARK reference links:
+
+- Landing page: https://artificialintelligencepathology.org/
+- Runs API: https://artificialintelligencepathology.org/api/runs
+- Example TCGA run: https://artificialintelligencepathology.org/runs/rf207d22e2c0c~TCGA-BLCA_svs
+
+</details>
+
+<details>
+<summary><strong>2) Run a full project from pre-extracted features with GOLDMARK API</strong></summary>
+
+This path reuses existing GOLDMARK training code (`scripts/train_task_v2.py`) and only adds API orchestration.
+The helper script:
+
+- discovers downloadable artifacts from `https://artificialintelligencepathology.org/api/runs/{slug}/downloads`
+- downloads the sanitized gene split manifest bundle
+- resolves feature tensors (local extracted dir when available, or downloaded feature zip)
+- launches `scripts/train_task_v2.py` with `AGGREGATION_METHOD=gma`
+
+Script:
+
+- `scripts/api_demo_from_preextracted_features.py`
+
+BLCA + FGFR3 + UNI demo:
+
+```bash
+python scripts/api_demo_from_preextracted_features.py \
+  --base-url https://artificialintelligencepathology.org \
+  --slug rf207d22e2c0c~TCGA-BLCA_svs \
+  --gene FGFR3 \
+  --encoder uni \
+  --work-dir runs/api_demo_blca_fgfr3_uni \
+  --sample-per-class 40 \
+  --epochs 5 \
+  --device cuda
+```
+
+Useful API links for this workflow:
+
+- Runs list: https://artificialintelligencepathology.org/api/runs?dataset=tcga
+- Download catalog (BLCA example): https://artificialintelligencepathology.org/api/runs/rf207d22e2c0c~TCGA-BLCA_svs/downloads?download_source=postgres&results_mode=publication&epoch_view=best
+- Category-specific API instructions (manifest): https://artificialintelligencepathology.org/download-api-instructions?slug=rf207d22e2c0c~TCGA-BLCA_svs&category=manifest&results_mode=publication&epoch_view=best&download_source=postgres
+- Category-specific API instructions (features): https://artificialintelligencepathology.org/download-api-instructions?slug=rf207d22e2c0c~TCGA-BLCA_svs&category=features&results_mode=publication&epoch_view=best&download_source=postgres
+
+Notes:
+
+- On the same host where `/data3/vanderbc/foundation_model_training_images/...` is mounted, keep `--prefer-local-feature-dir` (default) to avoid re-downloading very large feature zips.
+- On a remote host, use `--no-prefer-local-feature-dir` and optionally `--extract-all-features` when you need the full feature archive.
+
+</details>
+
+<details>
+<summary><strong>3) Run Inference on User Slides (requires mutations curation)</strong></summary>
+
+This workflow is for external engineers running GOLDMARK on their own `.svs` slides.
+
+Important constraints:
+
+- You must curate mutation-derived labels outside this repo and provide **binary labels** (`Positive/Negative` -> `1/0`) per task.
+- We do **not** provide one canonical OncoKB labeling script for external data because source formats differ across institutions.
+- Given a labeled manifest + slides, GOLDMARK can run `tiling -> features -> inference` and consume slide-level checkpoints from the public API.
+
+### A) Build a labeled user manifest
+
+Minimum recommended columns:
+
+- `slide_id` (stable per-slide id)
+- `slide_path` (absolute path to `.svs`)
+- `label_index` (`0` or `1`)
+- `split` (set all rows to `test` for pure inference)
+
+Example:
+
+```csv
+slide_id,slide_path,label_index,split
+CASE_001,/absolute/path/CASE_001.svs,1,test
+CASE_002,/absolute/path/CASE_002.svs,0,test
+```
+
+### B) Tiling + feature extraction (canonical encoders)
+
+```bash
+PYTHONPATH=. python -m goldmark tiling user_manifest.csv \
+  --output runs \
+  --run-name user_slides_fgfr3 \
+  --tile-size 224 \
+  --stride 224 \
+  --target-mpp 0.5
+
+PYTHONPATH=. python -m goldmark features user_manifest.csv \
+  --tile-manifests runs/user_slides_fgfr3/tiling/tiles \
+  --output runs \
+  --run-name user_slides_fgfr3 \
+  --encoder uni \
+  --device cuda \
+  --num-workers 4
+```
+
+You may switch `--encoder` to any canonical encoder (`gigapath_ft`, `h-optimus-0`, `prov-gigapath`, `uni`, `virchow`, `virchow2`).
+
+### C) Pull a checkpoint from GOLDMARK API (default: best external inference AUC)
+
+The checkpoint catalog is exposed from:
+
+- https://artificialintelligencepathology.org/api/runs/rf207d22e2c0c~TCGA-BLCA_svs/downloads?download_source=postgres&results_mode=publication&epoch_view=best
+
+The command below selects the checkpoint with the highest `external_auc` for one `(gene, encoder)` pair
+(fallback to `cv_auc` if `external_auc` is missing):
+
+```bash
+BASE_URL="https://artificialintelligencepathology.org"
+RUN_SLUG="rf207d22e2c0c~TCGA-BLCA_svs"
+GENE="FGFR3"
+ENCODER="uni"
+export GENE ENCODER
+
+DOWNLOADS_JSON="$(mktemp)"
+export DOWNLOADS_JSON
+curl -sS "${BASE_URL}/api/runs/${RUN_SLUG}/downloads?download_source=postgres&results_mode=publication&epoch_view=best" > "${DOWNLOADS_JSON}"
+
+BEST_JSON="$(python - <<'PY'
+import json,sys,re,os
+obj=json.load(open(os.environ["DOWNLOADS_JSON"]))
+gene=os.environ["GENE"].upper()
+enc=os.environ["ENCODER"].lower()
+def norm(x): return re.sub(r'[^a-z0-9]+','',str(x).lower())
+rows=[]
+for cat in obj.get("categories",[]):
+    if cat.get("key")!="slide_models":
+        continue
+    for it in cat.get("items",[]):
+        m=it.get("metadata") or {}
+        if str(m.get("gene","")).upper()!=gene:
+            continue
+        if norm(m.get("encoder",""))!=norm(enc):
+            continue
+        score=m.get("external_auc")
+        if score is None:
+            score=m.get("cv_auc")
+        rows.append((float(score) if score is not None else -1.0, it))
+if not rows:
+    raise SystemExit("No matching slide_models found.")
+rows.sort(key=lambda t:t[0], reverse=True)
+print(json.dumps(rows[0][1]))
+PY)"
+export BEST_JSON
+
+CKPT_URL="$(python -c 'import json,os; print(json.loads(os.environ["BEST_JSON"])["download_url"])')"
+mkdir -p models
+curl -L "${BASE_URL}${CKPT_URL}" -o "models/${GENE}_${ENCODER}_best_external_auc.pt"
+rm -f "${DOWNLOADS_JSON}"
+```
+
+### D) Run inference (GMA) on user slides
+
+```bash
+GENE="FGFR3"
+ENCODER="uni"
+
+PYTHONPATH=. python -m goldmark inference user_manifest.csv \
+  --feature-dir "runs/user_slides_fgfr3/features/${ENCODER}" \
+  --checkpoint "models/${GENE}_${ENCODER}_best_external_auc.pt" \
+  --output runs \
+  --run-name "user_slides_fgfr3_${ENCODER}_inference" \
+  --target label_index \
+  --split-column split \
+  --split-value test \
+  --export-attention \
+  --no-overlays
+```
+
+### E) Option: run all available checkpoints for `(gene, encoder)`
+
+If you want split-by-split checkpoint sweeps (instead of default “best external AUC” only):
+
+```bash
+BASE_URL="https://artificialintelligencepathology.org"
+RUN_SLUG="rf207d22e2c0c~TCGA-BLCA_svs"
+GENE="FGFR3"
+ENCODER="uni"
+export GENE ENCODER
+
+DOWNLOADS_JSON="$(mktemp)"
+export DOWNLOADS_JSON
+curl -sS "${BASE_URL}/api/runs/${RUN_SLUG}/downloads?download_source=postgres&results_mode=publication&epoch_view=best" > "${DOWNLOADS_JSON}"
+
+python - <<'PY' > /tmp/checkpoints.tsv
+import json,sys,re,os
+obj=json.load(open(os.environ["DOWNLOADS_JSON"]))
+gene=os.environ["GENE"].upper()
+enc=os.environ["ENCODER"].lower()
+def norm(x): return re.sub(r'[^a-z0-9]+','',str(x).lower())
+for cat in obj.get("categories",[]):
+    if cat.get("key")!="slide_models":
+        continue
+    for it in cat.get("items",[]):
+        m=it.get("metadata") or {}
+        if str(m.get("gene","")).upper()!=gene:
+            continue
+        if norm(m.get("encoder",""))!=norm(enc):
+            continue
+        split=str(m.get("split","na"))
+        ext=m.get("external_auc")
+        cv=m.get("cv_auc")
+        print(f"{split}\t{ext}\t{cv}\t{it['download_url']}")
+PY
+rm -f "${DOWNLOADS_JSON}"
+
+while IFS=$'\t' read -r SPLIT EXT_AUC CV_AUC URL; do
+  OUT_CKPT="models/${GENE}_${ENCODER}_split${SPLIT}.pt"
+  curl -L "${BASE_URL}${URL}" -o "${OUT_CKPT}"
+  PYTHONPATH=. python -m goldmark inference user_manifest.csv \
+    --feature-dir runs/user_slides_fgfr3/features/uni \
+    --checkpoint "${OUT_CKPT}" \
+    --output runs \
+    --run-name "user_slides_fgfr3_uni_split${SPLIT}" \
+    --target label_index \
+    --split-column split \
+    --split-value test \
+    --no-overlays
+done < /tmp/checkpoints.tsv
+```
+
+</details>
 
 ## Notes
 
