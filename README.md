@@ -18,9 +18,9 @@ preprocessing and evaluation criteria.
 
 ## Manuscript Figures (Fig 1-3)
 
-- Fig 1 (workflow): [images/workflow_schematic_with_run.pdf](images/workflow_schematic_with_run.pdf)
-- Fig 2 (cross-validation + reciprocal external): [images/combined_tcga_msk_boxplots_multipanel.pdf](images/combined_tcga_msk_boxplots_multipanel.pdf)
-- Fig 3 (top eight task grid): [images/combined_tcga_msk_boxplots_target_grid.pdf](images/combined_tcga_msk_boxplots_target_grid.pdf)
+- Fig 1 (workflow): [images/fig1_workflow.pdf](images/fig1_workflow.pdf)
+- Fig 2 (cross-validation + reciprocal external): [images/fig2_cv_reciprocal_external.pdf](images/fig2_cv_reciprocal_external.pdf)
+- Fig 3 (top eight task grid): [images/fig3_top8_task_grid.pdf](images/fig3_top8_task_grid.pdf)
 
 ## Start here (real GDC download + end-to-end pipeline)
 
