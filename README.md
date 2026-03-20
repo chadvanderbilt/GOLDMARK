@@ -859,15 +859,26 @@ in `sbatch` (or your scheduler of choice).
 <details>
 <summary><strong>1) Run a full project with slides from GDC (default)</strong></summary>
 
-Use the SLURM/nohup/end-to-end sections above. That path starts from GDC slide download and runs:
+This path starts from GDC slide download and runs:
 
 `download -> tiling -> features -> training -> inference`
 
-Recommended entry points:
+For concrete command examples, use the detailed sections above:
+
+- `### Recommended: TCGA-LUAD KRAS (5×70/30 splits) → external LUAD inference`
+- `SLURM (GPU example)` accordion (`examples/slurm/submit_tcga_cv_to_external.sh`)
+- `nohup (interactive node)` accordion (`scripts/nohup_tcga_cv_to_external.sh`)
+- `End-to-end example (foreground)` accordion (`examples/run_tcga_luad_egfr_end_to_end.sh`)
+
+Primary orchestration script:
 
 - `scripts/tcga_cv_to_external_full_run.py`
-- `examples/slurm/submit_tcga_cv_to_external.sh`
-- `scripts/nohup_tcga_cv_to_external.sh`
+
+Run outputs:
+
+- `runs/<RUN_NAME>/` (full artifacts)
+- `runs/<RUN_NAME>/training/checkpoints/` (trained checkpoints)
+- `runs/<RUN_NAME>/inference/` (inference outputs)
 
 Public GOLDMARK reference links:
 
