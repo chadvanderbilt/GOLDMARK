@@ -1,5 +1,9 @@
 # GOLDMARK — Manuscript Reference Pipeline - https://artificialintelligencepathology.org/
 
+<p align="center">
+  <img src="images/goldmark-logo.png" alt="GOLDMARK logo" width="320" />
+</p>
+
 This repository is in support of the manuscript **GOLDMARK: Governed Outcome-Linked Diagnostic Model Assessment Reference Kit** and is composed of the end-to-end benchmarking pipeline:
 
 1) **Target construction** (TCGA via GDC download + variant labeling / OncoKB annotation)
@@ -11,6 +15,12 @@ This repository is in support of the manuscript **GOLDMARK: Governed Outcome-Lin
 The design goal is reproducibility and clarity: **cross-validation alone is not sufficient**—the pipeline
 is built around **reciprocal external testing** (e.g., TCGA→external and external→TCGA) under identical
 preprocessing and evaluation criteria.
+
+## Manuscript Figures (Fig 1-3)
+
+- Fig 1 (workflow): [images/workflow_schematic_with_run.pdf](images/workflow_schematic_with_run.pdf)
+- Fig 2 (cross-validation + reciprocal external): [images/combined_tcga_msk_boxplots_multipanel.pdf](images/combined_tcga_msk_boxplots_multipanel.pdf)
+- Fig 3 (top eight task grid): [images/combined_tcga_msk_boxplots_target_grid.pdf](images/combined_tcga_msk_boxplots_target_grid.pdf)
 
 ## Start here (real GDC download + end-to-end pipeline)
 
