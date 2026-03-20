@@ -1109,4 +1109,4 @@ done < /tmp/checkpoints.tsv
 
 - This repo intentionally **does not** ship raw WSIs or protected clinical data.
 - OncoKB and GDC access are governed by their respective terms; keep tokens out of git history.
-- The code is structured for clarity and parity with the manuscript pipeline, not as a polished SDK.
+- The codebase is built around downloadable artifacts and reproducible workflows exposed via the GOLDMARK API: https://artificialintelligencepathology.org/
